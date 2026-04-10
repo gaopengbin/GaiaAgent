@@ -2,6 +2,8 @@
   <h1>GaiaAgent</h1>
   <p><strong>AI-Powered 3D GIS Assistant</strong></p>
   <p>Talk to a live <a href="https://cesium.com/">CesiumJS</a> 3D globe using natural language, powered by LLM and <a href="https://github.com/gaopengbin/cesium-mcp">cesium-mcp</a>.</p>
+
+  <img src="docs/resource/124_1x_shots_so.png" alt="GaiaAgent Preview" width="800" />
 </div>
 
 ---
