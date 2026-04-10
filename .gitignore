@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+dist/
+target/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+*.tsbuildinfo
+
+# Cesium local assets (copied from node_modules by scripts/copy-cesium.mjs)
+examples/web_ui/frontend/public/cesium/
