@@ -21,6 +21,7 @@ export interface PlanStep {
   status: StepStatus
   error?: string | null
   result?: StepResult | null
+  round?: number  // ReAct round (1-based); omitted for single-round plans
 }
 
 export type ChatRole = 'user' | 'agent' | 'system' | 'error'

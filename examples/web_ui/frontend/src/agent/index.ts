@@ -1,8 +1,11 @@
 export { callLlm, streamLlm, cancelLlm } from './llm'
+export type { TokenUsage, LlmResult } from './llm'
 export { planFromGoal } from './planner'
 export { executePlan, normalizeToolResult } from './executor'
 export type { ToolCaller } from './executor'
-export { SYSTEM_PROMPT, formatToolSchemas } from './prompts'
+export { executeReAct } from './react'
+export type { ReactCallbacks } from './react'
+export { SYSTEM_PROMPT, SYSTEM_PROMPT_REACT, formatToolSchemas } from './prompts'
 export {
   appendUserEntry,
   appendAssistantEntry,

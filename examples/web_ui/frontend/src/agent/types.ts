@@ -29,6 +29,9 @@ export interface ModelSettings {
   openaiBaseUrl: string
   openaiApiKey: string
   openaiModel: string
+  cesiumIonToken: string
+  tiandituToken: string
+  proxyUrl: string
 }
 
 // ---- Context Memory ----

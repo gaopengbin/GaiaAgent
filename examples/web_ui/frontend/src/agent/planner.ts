@@ -58,15 +58,17 @@ export async function planFromGoal(
     try {
       let raw: string
       if (onThinking) {
-        raw = await streamLlm(
+        const result = await streamLlm(
           messages,
           settings,
           (delta) => onThinking(delta), // content tokens → also show live
           undefined,                     // requestId
           (delta) => onThinking(delta), // reasoning tokens → show live
         )
+        raw = result.content
       } else {
-        raw = await callLlm(messages, settings)
+        const result = await callLlm(messages, settings)
+        raw = result.content
       }
       const plan = parsePlanJson(raw, goal)
       if (plan.steps.length > 0 || plan.reply) return plan

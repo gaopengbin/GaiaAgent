@@ -2,6 +2,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { Channel } from '@tauri-apps/api/core'
 import type { LlmMessage, ModelSettings } from './types'
 
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
 function buildLlmUrl(settings: ModelSettings): string {
   if (settings.provider === 'ollama') {
     const host = settings.ollamaHost || 'http://localhost:11434'
@@ -32,7 +38,7 @@ function buildLlmBody(messages: LlmMessage[], settings: ModelSettings, stream = 
     model,
     max_tokens: 4096,
     messages,
-    ...(stream ? { stream: true } : {}),
+    ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
   }
 
   // Ollama OpenAI-compat endpoint supports num_ctx via options
@@ -43,10 +49,15 @@ function buildLlmBody(messages: LlmMessage[], settings: ModelSettings, stream = 
   return JSON.stringify(payload)
 }
 
+export interface LlmResult {
+  content: string
+  usage?: TokenUsage
+}
+
 export async function callLlm(
   messages: LlmMessage[],
   settings: ModelSettings,
-): Promise<string> {
+): Promise<LlmResult> {
   const url = buildLlmUrl(settings)
   const headers = buildLlmHeaders(settings)
   const body = buildLlmBody(messages, settings)
@@ -67,6 +78,7 @@ export async function callLlm(
       message?: { content?: string; reasoning_content?: string }
       finish_reason?: string
     }>
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
   }
   const choice = data?.choices?.[0]
   const content = choice?.message?.content || choice?.message?.reasoning_content
@@ -77,7 +89,14 @@ export async function callLlm(
     }
     throw new Error('LLM 返回内容为空，请检查模型配置')
   }
-  return content
+
+  const usage = data?.usage ? {
+    promptTokens: data.usage.prompt_tokens ?? 0,
+    completionTokens: data.usage.completion_tokens ?? 0,
+    totalTokens: data.usage.total_tokens ?? 0,
+  } : undefined
+
+  return { content, usage }
 }
 
 export interface StreamChunk {
@@ -91,13 +110,14 @@ export async function streamLlm(
   onChunk: (delta: string) => void,
   requestId?: string,
   onReasoning?: (delta: string) => void,
-): Promise<string> {
+): Promise<LlmResult> {
   const url = buildLlmUrl(settings)
   const headers = buildLlmHeaders(settings)
   const body = buildLlmBody(messages, settings, true)
 
   const id = requestId ?? `stream-${Date.now()}`
   let fullContent = ''
+  let usage: TokenUsage | undefined
 
   const channel = new Channel<StreamChunk>()
   channel.onmessage = (msg: StreamChunk) => {
@@ -106,6 +126,15 @@ export async function streamLlm(
       try {
         const parsed = JSON.parse(msg.data) as {
           choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>
+          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+        }
+        // Capture usage from final chunk (OpenAI stream_options.include_usage)
+        if (parsed.usage) {
+          usage = {
+            promptTokens: parsed.usage.prompt_tokens ?? 0,
+            completionTokens: parsed.usage.completion_tokens ?? 0,
+            totalTokens: parsed.usage.total_tokens ?? 0,
+          }
         }
         const reasoning = parsed?.choices?.[0]?.delta?.reasoning_content ?? ''
         const content = parsed?.choices?.[0]?.delta?.content ?? ''
@@ -136,7 +165,7 @@ export async function streamLlm(
     onEvent: channel,
   })
 
-  return fullContent
+  return { content: fullContent, usage }
 }
 
 export async function cancelLlm(requestId: string): Promise<void> {

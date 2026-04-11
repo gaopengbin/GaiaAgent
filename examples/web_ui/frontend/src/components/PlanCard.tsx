@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { CheckCircle2, XCircle, Loader2, Circle, Check, X, ChevronDown, ChevronUp, Copy } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { PlanStep, StepStatus, StepResult } from '../types'
@@ -222,7 +222,18 @@ export function PlanCard({ goal, steps, confirmed, onConfirm, onCancel }: PlanCa
         </CardHeader>
 
         <CardContent className="flex flex-col gap-1.5 pb-2">
-          {steps.map(s => <StepRow key={s.id} step={s} />)}
+          {steps.map((s, i) => (
+            <Fragment key={s.id}>
+              {s.round && s.round > 1 && (i === 0 || steps[i - 1].round !== s.round) && (
+                <div className="flex items-center gap-2 py-0.5 text-[10px] text-muted-foreground">
+                  <Separator className="flex-1" />
+                  <span className="whitespace-nowrap">Round {s.round}</span>
+                  <Separator className="flex-1" />
+                </div>
+              )}
+              <StepRow step={s} />
+            </Fragment>
+          ))}
         </CardContent>
 
         {!confirmed && (
