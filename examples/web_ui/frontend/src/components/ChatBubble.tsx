@@ -56,6 +56,22 @@ interface ChatBubbleProps {
 export function ChatBubble({ role, text, onOptionSelect }: ChatBubbleProps) {
   const opts = role === 'agent' ? extractNumberedOptions(text) : []
 
+  // When options are extracted, strip the numbered lines from display text
+  // but keep any trailing sentence after '。' that was trimmed from the option label
+  const displayText = opts.length >= 2
+    ? text.split('\n').map(line => {
+        if (!/^\d+[.)]\s+/.test(line)) return line
+        const m = line.match(/^(\d+)[.)]\s+(.+)/)
+        if (m) {
+          const lastPeriod = m[2].lastIndexOf('。')
+          if (lastPeriod >= 0 && lastPeriod < m[2].length - 1) {
+            return m[2].slice(lastPeriod + 1)
+          }
+        }
+        return ''
+      }).filter(l => l !== '').join('\n').trim()
+    : text
+
   if (role === 'system') {
     return (
       <div className="flex justify-center py-2">
@@ -91,7 +107,7 @@ export function ChatBubble({ role, text, onOptionSelect }: ChatBubbleProps) {
             isError && 'rounded-bl-sm border border-destructive/30 bg-destructive/10 text-destructive',
           )}
         >
-          {isUser ? text : renderMarkdown(text)}
+          {isUser ? text : renderMarkdown(displayText)}
         </div>
 
         {opts.length >= 2 && (
@@ -101,7 +117,7 @@ export function ChatBubble({ role, text, onOptionSelect }: ChatBubbleProps) {
                 key={o.num}
                 variant="outline"
                 size="sm"
-                onClick={() => onOptionSelect?.(o.num)}
+                onClick={() => onOptionSelect?.(o.label)}
                 className="h-auto max-w-full rounded-full border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground text-left whitespace-normal"
               >
                 {o.num}. {renderMarkdownInline(o.label)}
