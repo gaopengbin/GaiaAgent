@@ -39,8 +39,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: examples/tauri-app/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -66,7 +64,11 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
-      - name: Install frontend dependencies
+      - name: Install shared frontend dependencies
+        working-directory: examples/web_ui/frontend
+        run: npm ci
+
+      - name: Install Tauri app dependencies
         working-directory: examples/tauri-app
         run: npm ci
 
@@ -78,11 +80,11 @@ jobs:
           projectPath: examples/tauri-app
           tauriScript: npm run tauri
           args: --target ${{ matrix.target }}
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: 'GaiaAgent ${{ github.ref_name }}'
           releaseBody: |
             See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
           releaseDraft: true
           prerelease: false
-          includeRelease: true
+          includeRelease: ${{ startsWith(github.ref, 'refs/tags/') }}
           includeUpdaterJson: false
