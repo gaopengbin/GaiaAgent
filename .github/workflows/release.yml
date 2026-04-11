@@ -73,9 +73,9 @@ jobs:
           args: --target ${{ matrix.target }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: 'GaiaAgent ${{ github.ref_name }}'
-          releaseBody: |
-            See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-          releaseDraft: true
+          releaseBody: ''
+          releaseDraft: false
           prerelease: false
           includeRelease: ${{ startsWith(github.ref, 'refs/tags/') }}
+          generateReleaseNotes: true
           includeUpdaterJson: false
