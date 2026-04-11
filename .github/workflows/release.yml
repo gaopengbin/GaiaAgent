@@ -64,10 +64,6 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
-      - name: Install shared frontend dependencies
-        working-directory: examples/web_ui/frontend
-        run: npm ci
-
       - name: Install Tauri app dependencies
         working-directory: examples/tauri-app
         run: npm ci

@@ -2,8 +2,8 @@
 export default {
   darkMode: ['class'],
   content: [
-    '../web_ui/frontend/index.html',
-    '../web_ui/frontend/src/**/*.{ts,tsx}',
+    './index.html',
+    './src/**/*.{ts,tsx}',
   ],
   theme: {
     extend: {

@@ -16,8 +16,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": "../web_ui/frontend",
+    "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] }
   },
-  "include": ["../web_ui/frontend/src"]
+  "include": ["src"]
 }
