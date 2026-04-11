@@ -21,7 +21,7 @@ Thumbs.db
 *.tsbuildinfo
 
 # Cesium local assets (copied from node_modules by scripts/copy-cesium.mjs)
-examples/tauri-app/public/cesium/
+public/cesium/
 
 # Bridge file (copied from node_modules by scripts/update-bridge.mjs)
-examples/tauri-app/public/cesium-mcp-bridge.browser.global.js
+public/cesium-mcp-bridge.browser.global.js

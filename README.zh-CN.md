@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="examples/tauri-app/src-tauri/icons/128x128.png" alt="GaiaAgent 图标" width="80" />
+  <img src="src-tauri/icons/128x128.png" alt="GaiaAgent 图标" width="80" />
   <h1>GaiaAgent（盖亚）</h1>
   <p><strong>🌍 AI 驱动的三维 GIS 助手 — 用自然语言对话操控三维地球</strong></p>
 
@@ -23,7 +23,7 @@ GaiaAgent 是一款桌面/网页端 AI 助手，通过自然语言对话操控 [
 - 🗣️ **自然语言操控** — 对话即指令，AI 在三维地球上执行 GIS 操作
 - 🧠 **多模型支持** — Ollama、OpenAI、DeepSeek、通义千问、Claude 及任意 OpenAI 兼容 API
 - 🗺️ **72+ GIS 工具** — 相机、实体、图层、热力图、轨迹、3D Tiles、地形等
-- 🖥️ **双版本** — Tauri 桌面应用（约 8 MB）或浏览器端 Web UI
+- 🖥️ **桌面应用** — Tauri 2 原生应用（约 8 MB），跨平台支持
 - 🔄 **ReAct 智能体循环** — 思考 → 行动 → 观察 多轮推理，自动错误恢复
 - 🔌 **MCP 协议** — 完整 stdio MCP 支持，可添加自定义 MCP 服务器（地图、数据、AI 等）
 - 📊 **Token 追踪** — 每轮 Token 消耗量实时展示
@@ -61,43 +61,16 @@ graph TB
     Plan -.->|实时状态| Chat
 ```
 
-## 📦 双版本
-
-| | 🖥️ Tauri 桌面版 | 🌐 Web UI |
-|---|---|---|
-| 路径 | [`examples/tauri-app/`](examples/tauri-app/) | [`examples/web_ui/`](examples/web_ui/) |
-| 后端 | Rust (Tauri IPC) | Node.js (Express + WebSocket) |
-| 打包 | ~8 MB 二进制 | 浏览器直接访问 |
-| LLM 调用 | Rust HTTP → OpenAI 兼容 API | Node.js `openai` / `@anthropic-ai/sdk` |
-| MCP | stdio JSON-RPC（多服务器） | HTTP + WebSocket |
-| 智能体 | ReAct 思考-行动-观察循环 | 规划与执行 |
-
-## 🚀 快速开始
-
-### Tauri 桌面版
+## � 快速开始
 
 ```bash
-cd examples/tauri-app
+git clone https://github.com/gaopengbin/GaiaAgent.git
+cd GaiaAgent
 npm install
 npm run tauri:dev
 ```
 
 在应用内设置对话框（⚙️）中配置 LLM 提供商和 MCP 服务器。
-
-### Web UI
-
-```bash
-# 后端
-cd examples/web_ui/backend
-cp .env.example .env   # 配置 LLM 提供商
-npm install
-npm run dev
-
-# 前端（另开终端）
-cd examples/web_ui/frontend
-npm install
-npm run dev
-```
 
 ## 🤖 支持的 LLM
 
@@ -165,16 +138,16 @@ git push origin v0.1.0
 
 ```
 GaiaAgent/
-├── examples/
-│   ├── tauri-app/              # Tauri 2 + React 桌面应用
-│   │   ├── src/                # React 前端（CesiumViewer + 聊天面板）
-│   │   └── src-tauri/          # Rust 后端（LLM + MCP 集成）
-│   └── web_ui/
-│       ├── backend/            # Node.js + Express + WebSocket 服务
-│       ├── frontend/           # React 前端（共享组件）
-│       └── static/             # 预构建的前端资源
+├── src/                        # React + TypeScript 前端
+│   ├── agent/                  # ReAct 循环、LLM、规划器、提示词
+│   ├── components/             # CesiumViewer、ChatPanel、PlanCard 等
+│   ├── hooks/                  # useTauriAgent、useBridgeWS
+│   └── i18n/                   # 国际化（中/英）
+├── src-tauri/                  # Rust 后端 (Tauri 2)
+│   └── src/                    # lib.rs (IPC)、mcp.rs (MCP 管理器)
+├── public/                     # 静态资源 (Cesium、bridge)
 ├── docs/                       # 设计文档与资源
-└── README.md
+└── package.json
 ```
 
 ## 📄 许可证

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="examples/tauri-app/src-tauri/icons/128x128.png" alt="GaiaAgent Icon" width="80" />
+  <img src="src-tauri/icons/128x128.png" alt="GaiaAgent Icon" width="80" />
   <h1>GaiaAgent</h1>
   <p><strong>🌍 AI-Powered 3D GIS Assistant — Talk to 3D Globe in natural language</strong></p>
 
@@ -23,7 +23,7 @@ GaiaAgent is a desktop / web AI assistant that lets you control a live [CesiumJS
 - 🗣️ **Natural Language Control** — Ask questions, the AI executes GIS operations on the 3D globe
 - 🧠 **Multi-LLM Support** — Ollama, OpenAI, DeepSeek, Qwen, Claude, and any OpenAI-compatible API
 - 🗺️ **72+ GIS Tools** — Camera, entities, layers, heatmaps, trajectories, 3D Tiles, terrain, and more
-- 🖥️ **Two Editions** — Tauri desktop app (~8 MB) or browser-based Web UI
+- 🖥️ **Desktop App** — Tauri 2 native app (~8 MB), cross-platform
 - 🔄 **ReAct Agent Loop** — Think → Act → Observe multi-round reasoning with automatic error recovery
 - 🔌 **MCP Protocol** — Full stdio MCP support, add custom MCP servers (maps, data, AI, etc.)
 - 📊 **Token Tracking** — Per-round token consumption displayed in chat
@@ -61,43 +61,16 @@ graph TB
     Plan -.->|live status| Chat
 ```
 
-## 📦 Two Editions
-
-| | 🖥️ Tauri Desktop | 🌐 Web UI |
-|---|---|---|
-| Path | [`examples/tauri-app/`](examples/tauri-app/) | [`examples/web_ui/`](examples/web_ui/) |
-| Backend | Rust (Tauri IPC) | Node.js (Express + WebSocket) |
-| Packaging | ~8 MB binary | Browser-based |
-| LLM Call | Rust HTTP → OpenAI-compat API | Node.js `openai` / `@anthropic-ai/sdk` |
-| MCP | stdio JSON-RPC (multi-server) | HTTP + WebSocket |
-| Agent | ReAct Think-Act-Observe loop | Plan & Execute |
-
-## 🚀 Quick Start
-
-### Tauri Desktop
+## � Quick Start
 
 ```bash
-cd examples/tauri-app
+git clone https://github.com/gaopengbin/GaiaAgent.git
+cd GaiaAgent
 npm install
 npm run tauri:dev
 ```
 
 Configure LLM provider and MCP servers in the in-app settings dialog (⚙️).
-
-### Web UI
-
-```bash
-# Backend
-cd examples/web_ui/backend
-cp .env.example .env   # configure LLM provider
-npm install
-npm run dev
-
-# Frontend (separate terminal)
-cd examples/web_ui/frontend
-npm install
-npm run dev
-```
 
 ## 🤖 LLM Providers
 
@@ -165,16 +138,16 @@ Builds for: Windows x64, macOS arm64/x64, Linux x64.
 
 ```
 GaiaAgent/
-├── examples/
-│   ├── tauri-app/              # Tauri 2 + React desktop app
-│   │   ├── src/                # React frontend (CesiumViewer + ChatPanel)
-│   │   └── src-tauri/          # Rust backend (LLM + MCP integration)
-│   └── web_ui/
-│       ├── backend/            # Node.js + Express + WebSocket server
-│       ├── frontend/           # React frontend (shared components)
-│       └── static/             # Pre-built frontend assets
+├── src/                        # React + TypeScript frontend
+│   ├── agent/                  # ReAct loop, LLM, planner, prompts
+│   ├── components/             # CesiumViewer, ChatPanel, PlanCard, ...
+│   ├── hooks/                  # useTauriAgent, useBridgeWS
+│   └── i18n/                   # Internationalization (en/zh)
+├── src-tauri/                  # Rust backend (Tauri 2)
+│   └── src/                    # lib.rs (IPC), mcp.rs (MCP manager)
+├── public/                     # Static assets (Cesium, bridge)
 ├── docs/                       # Design docs & resources
-└── README.md
+└── package.json
 ```
 
 ## 📄 License
