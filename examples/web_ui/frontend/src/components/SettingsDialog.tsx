@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Server, Cloud, Globe, Bot, Plug, Plus, Play, Square, Trash2, Pencil, FileJson } from 'lucide-react'
+import { X, Server, Cloud, Globe, Bot, Plug, Plus, Play, Square, Trash2, Pencil, FileJson, Loader2 } from 'lucide-react'
 import { Button } from './ui/button'
 import { useTranslation } from 'react-i18next'
 import { invoke } from '@tauri-apps/api/core'
@@ -34,6 +34,7 @@ interface McpServerConfig {
   command: string
   args: string[]
   env: Record<string, string>
+  enabled?: boolean
 }
 
 interface McpConfig {
@@ -74,14 +75,17 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
   // Load MCP data when MCP tab is selected
   const loadMcpData = useCallback(async () => {
     try {
-      const [config, running] = await Promise.all([
-        invoke<McpConfig>('mcp_load_config'),
-        invoke<string[]>('mcp_list_servers'),
-      ])
+      const config = await invoke<McpConfig>('mcp_load_config')
       setMcpConfig(config)
-      setMcpRunning(running)
     } catch (e) {
       console.error('Failed to load MCP config:', e)
+    }
+    try {
+      const running = await invoke<string[]>('mcp_list_servers')
+      setMcpRunning(running)
+    } catch (e) {
+      console.error('Failed to list MCP servers:', e)
+      setMcpRunning([])
     }
   }, [])
 
@@ -90,6 +94,26 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
       loadMcpData()
     }
   }, [open, tab, loadMcpData])
+
+  // Listen for auto-start events from useTauriAgent init
+  useEffect(() => {
+    const onStarting = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail
+      setMcpBusy(b => ({ ...b, [id]: true }))
+    }
+    const onStarted = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail
+      setMcpBusy(b => ({ ...b, [id]: false }))
+      // Refresh running list
+      invoke<string[]>('mcp_list_servers').then(setMcpRunning).catch(() => {})
+    }
+    window.addEventListener('mcp-server-starting', onStarting)
+    window.addEventListener('mcp-server-started', onStarted)
+    return () => {
+      window.removeEventListener('mcp-server-starting', onStarting)
+      window.removeEventListener('mcp-server-started', onStarted)
+    }
+  }, [])
 
   const handleMcpStart = useCallback(async (id: string) => {
     const cfg = mcpConfig.servers[id]
@@ -104,6 +128,12 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
         env: Object.keys(cfg.env).length > 0 ? cfg.env : null,
       })
       setMcpRunning(r => [...r, id])
+      // Persist enabled state
+      const updated: McpConfig = {
+        servers: { ...mcpConfig.servers, [id]: { ...cfg, enabled: true } },
+      }
+      await invoke('mcp_save_config', { config: updated }).catch(() => {})
+      setMcpConfig(updated)
       window.dispatchEvent(new Event('mcp-tools-changed'))
     } catch (e) {
       setMcpError(`${id}: ${e}`)
@@ -118,13 +148,22 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
     try {
       await invoke('mcp_stop_server', { serverId: id })
       setMcpRunning(r => r.filter(x => x !== id))
+      // Persist disabled state
+      const cfg = mcpConfig.servers[id]
+      if (cfg) {
+        const updated: McpConfig = {
+          servers: { ...mcpConfig.servers, [id]: { ...cfg, enabled: false } },
+        }
+        await invoke('mcp_save_config', { config: updated }).catch(() => {})
+        setMcpConfig(updated)
+      }
       window.dispatchEvent(new Event('mcp-tools-changed'))
     } catch (e) {
       setMcpError(`${id}: ${e}`)
     } finally {
       setMcpBusy(b => ({ ...b, [id]: false }))
     }
-  }, [])
+  }, [mcpConfig])
 
   const handleMcpAdd = useCallback(async () => {
     const id = newId.trim()
@@ -419,10 +458,16 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-semibold text-foreground">{id}</span>
                         <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                          isRunning ? 'bg-green-500/15 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'
+                          busy ? 'bg-yellow/15 text-yellow'
+                          : isRunning ? 'bg-green/15 text-green'
+                          : 'bg-muted text-muted-foreground'
                         }`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${isRunning ? 'bg-green-500' : 'bg-muted-foreground/50'}`} />
-                          {isRunning ? t('settings.mcpRunning') : t('settings.mcpStopped')}
+                          {busy ? (
+                            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                          ) : (
+                            <span className={`h-1.5 w-1.5 rounded-full ${isRunning ? 'bg-green' : 'bg-muted-foreground/50'}`} />
+                          )}
+                          {busy ? t('settings.mcpStarting') : isRunning ? t('settings.mcpRunning') : t('settings.mcpStopped')}
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
@@ -438,7 +483,7 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
                           <button
                             onClick={() => handleMcpStop(id)}
                             disabled={busy}
-                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
+                            className="rounded p-1 text-red hover:bg-red/10 transition-colors disabled:opacity-50"
                             title={t('settings.mcpStop')}
                           >
                             <Square className="h-3.5 w-3.5" />
@@ -447,7 +492,7 @@ export function SettingsDialog({ open, onClose, settings, onSave }: SettingsDial
                           <button
                             onClick={() => handleMcpStart(id)}
                             disabled={busy}
-                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-green-600 transition-colors disabled:opacity-50"
+                            className="rounded p-1 text-green hover:bg-green/10 transition-colors disabled:opacity-50"
                             title={t('settings.mcpStart')}
                           >
                             <Play className="h-3.5 w-3.5" />
