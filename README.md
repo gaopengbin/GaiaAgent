@@ -22,9 +22,12 @@ GaiaAgent is a desktop / web AI assistant that lets you control a live [CesiumJS
 
 - 🗣️ **Natural Language Control** — Ask questions, the AI executes GIS operations on the 3D globe
 - 🧠 **Multi-LLM Support** — Ollama, OpenAI, DeepSeek, Qwen, Claude, and any OpenAI-compatible API
-- 🗺️ **59 GIS Tools** — Camera, entities, layers, heatmaps, trajectories, 3D Tiles, and more
-- 🖥️ **Two Editions** — Tauri desktop app (~15 MB) or browser-based Web UI
-- 📋 **Plan & Execute** — AI decomposes complex tasks into step-by-step plans with visual cards
+- 🗺️ **72+ GIS Tools** — Camera, entities, layers, heatmaps, trajectories, 3D Tiles, terrain, and more
+- 🖥️ **Two Editions** — Tauri desktop app (~8 MB) or browser-based Web UI
+- 🔄 **ReAct Agent Loop** — Think → Act → Observe multi-round reasoning with automatic error recovery
+- 🔌 **MCP Protocol** — Full stdio MCP support, add custom MCP servers (maps, data, AI, etc.)
+- 📊 **Token Tracking** — Per-round token consumption displayed in chat
+- 📋 **Visual Plan Cards** — AI decomposes tasks into step-by-step plans with live execution status
 
 ## 🏗️ Architecture
 
@@ -36,26 +39,26 @@ graph TB
         Cesium["🌍 CesiumJS Viewer"]
     end
 
-    subgraph Backend["⚙️ Backend"]
-        direction TB
-        Tauri["Tauri 2 · Rust IPC"]
-        Node["Node.js · WebSocket"]
+    subgraph Backend["⚙️ Tauri 2 · Rust"]
+        ReAct["🔄 ReAct Loop\n(Think → Act → Observe)"]
+        MCP_Mgr["🔌 MCP Manager\n(stdio JSON-RPC)"]
     end
 
-    subgraph MCP["🔌 cesium-mcp"]
-        Runtime["cesium-mcp-runtime\n(Node.js · port 9100)"]
-        Bridge["cesium-mcp-bridge\n(Browser SDK)"]
+    subgraph MCP_Servers["MCP Servers"]
+        cesium_mcp["cesium-mcp-runtime\n(72+ GIS tools)"]
+        custom_mcp["Custom MCP Servers\n(maps, data, AI, ...)"]
     end
 
     LLM["🤖 LLM Provider\n(OpenAI / DeepSeek / Qwen / Claude / Ollama)"]
 
-    Chat -->|user message| Backend
-    Backend -->|function call| LLM
-    LLM -->|tool calls| Backend
-    Backend -->|MCP command| Runtime
-    Runtime -->|WebSocket| Bridge
-    Bridge -->|JS API| Cesium
-    Plan -.->|display| Chat
+    Chat -->|user message| ReAct
+    ReAct -->|streaming| LLM
+    LLM -->|tool calls| ReAct
+    ReAct -->|MCP call_tool| MCP_Mgr
+    MCP_Mgr -->|stdio| cesium_mcp
+    MCP_Mgr -->|stdio| custom_mcp
+    cesium_mcp -->|WebSocket| Cesium
+    Plan -.->|live status| Chat
 ```
 
 ## 📦 Two Editions
@@ -64,9 +67,10 @@ graph TB
 |---|---|---|
 | Path | [`examples/tauri-app/`](examples/tauri-app/) | [`examples/web_ui/`](examples/web_ui/) |
 | Backend | Rust (Tauri IPC) | Node.js (Express + WebSocket) |
-| Packaging | ~15 MB binary | Browser-based |
+| Packaging | ~8 MB binary | Browser-based |
 | LLM Call | Rust HTTP → OpenAI-compat API | Node.js `openai` / `@anthropic-ai/sdk` |
-| MCP | HTTP `/api/command` | stdio MCP protocol |
+| MCP | stdio JSON-RPC (multi-server) | HTTP + WebSocket |
+| Agent | ReAct Think-Act-Observe loop | Plan & Execute |
 
 ## 🚀 Quick Start
 
@@ -74,10 +78,11 @@ graph TB
 
 ```bash
 cd examples/tauri-app
-cp .env.example .env   # configure LLM provider
 npm install
 npm run tauri:dev
 ```
+
+Configure LLM provider and MCP servers in the in-app settings dialog (⚙️).
 
 ### Web UI
 
@@ -109,7 +114,7 @@ Set `LLM_PROVIDER` in `.env`:
 
 ## 🛠️ Available Tools
 
-59 tools across 12 toolsets via [cesium-mcp](https://github.com/gaopengbin/cesium-mcp):
+72+ tools across 12 toolsets via [cesium-mcp](https://github.com/gaopengbin/cesium-mcp), plus any custom MCP servers you add:
 
 | Toolset | Description |
 |---------|------------|
@@ -126,7 +131,35 @@ Set `LLM_PROVIDER` in `.env`:
 | `scene` | Scene-level settings |
 | `geolocation` | Geocoding & search |
 
-> Set `CESIUM_TOOLSETS=all` in `.env` to enable everything.
+> Configure tool sets and add custom MCP servers in the settings dialog.
+
+## 🔌 MCP Support
+
+GaiaAgent's Tauri edition supports the [Model Context Protocol](https://modelcontextprotocol.io/) for extensible tool integration. Add any MCP server via the built-in settings dialog:
+
+```json
+{
+  "amap-maps": {
+    "command": "npx",
+    "args": ["-y", "@amap/amap-maps-mcp-server"],
+    "env": { "AMAP_MAPS_API_KEY": "your-key" },
+    "enabled": true
+  }
+}
+```
+
+MCP servers are managed through stdio JSON-RPC, with auto-start on launch and live status indicators.
+
+## 🔄 CI / Release
+
+Automated multi-platform builds via GitHub Actions. Push a version tag to create a release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Builds for: Windows x64, macOS arm64/x64, Linux x64.
 
 ## 📁 Project Structure
 
