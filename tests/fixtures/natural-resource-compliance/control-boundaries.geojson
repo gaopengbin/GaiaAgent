@@ -1,0 +1,72 @@
+{
+  "type": "FeatureCollection",
+  "name": "natural_resource_control_boundaries",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "boundaryId": "B-REDLINE-001",
+        "controlType": "ecological_redline",
+        "controlName": "生态保护红线示例区",
+        "authority": "示例自然资源主管部门",
+        "reviewRequirement": "禁止占用；如确需占用需进入专项论证"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.379, 39.924],
+            [116.384, 39.924],
+            [116.384, 39.929],
+            [116.379, 39.929],
+            [116.379, 39.924]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "boundaryId": "B-FARMLAND-001",
+        "controlType": "permanent_basic_farmland",
+        "controlName": "永久基本农田示例片区",
+        "authority": "示例自然资源主管部门",
+        "reviewRequirement": "原则上不得占用；需人工核验边界和面积"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.384, 39.92],
+            [116.394, 39.92],
+            [116.394, 39.925],
+            [116.384, 39.925],
+            [116.384, 39.92]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "boundaryId": "B-WATER-001",
+        "controlType": "river_protection_zone",
+        "controlName": "河道保护范围示例区",
+        "authority": "示例水务主管部门",
+        "reviewRequirement": "靠近河道需核验蓝线范围"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.402, 39.928],
+            [116.408, 39.928],
+            [116.408, 39.934],
+            [116.402, 39.934],
+            [116.402, 39.928]
+          ]
+        ]
+      }
+    }
+  ]
+}

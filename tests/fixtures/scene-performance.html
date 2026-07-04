@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GaiaAgent Scene Performance Contract</title>
+    <link rel="stylesheet" href="/cesium/Widgets/widgets.css" />
+    <style>
+      html,
+      body,
+      #viewer {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      #result {
+        position: fixed;
+        z-index: 2;
+        top: 8px;
+        left: 8px;
+        max-width: 90%;
+        padding: 8px;
+        background: #111d;
+        color: white;
+        font: 12px monospace;
+      }
+    </style>
+    <script src="/cesium/Cesium.js"></script>
+    <script src="/cesium-mcp-bridge.browser.global.js"></script>
+  </head>
+  <body>
+    <div id="result" data-testid="benchmark">running</div>
+    <div id="viewer"></div>
+    <script>
+      ;(async () => {
+        const result = document.querySelector('#result')
+        try {
+          const viewer = new Cesium.Viewer('viewer', {
+            baseLayer: false,
+            baseLayerPicker: false,
+            animation: false,
+            timeline: false,
+            geocoder: false,
+            homeButton: false,
+          })
+          const bridge = new CesiumMcpBridge.CesiumBridge(viewer)
+          const count = 50_000
+          const features = Array.from({ length: count }, (_, index) => ({
+            type: 'Feature',
+            id: index,
+            properties: { index },
+            geometry: {
+              type: 'Point',
+              coordinates: [100 + (index % 500) * 0.01, 20 + Math.floor(index / 500) * 0.01],
+            },
+          }))
+          const started = performance.now()
+          const added = await bridge.execute({
+            action: 'addGeoJsonPrimitive',
+            params: {
+              id: 'benchmark-50k',
+              name: 'Benchmark 50k',
+              data: { type: 'FeatureCollection', features },
+            },
+          })
+          const loadMs = performance.now() - started
+          const snapshot = bridge.exportScene()
+          const beforeRemove = snapshot.layers.filter((layer) => layer.id === 'benchmark-50k').length
+          await bridge.execute({ action: 'removeLayer', params: { id: 'benchmark-50k' } })
+          const afterRemove = bridge
+            .exportScene()
+            .layers.filter((layer) => layer.id === 'benchmark-50k').length
+          result.textContent = JSON.stringify({
+            status: 'passed',
+            count,
+            loadMs: Math.round(loadMs),
+            beforeRemove,
+            afterRemove,
+            added,
+          })
+          result.dataset.status = 'passed'
+        } catch (error) {
+          result.textContent = JSON.stringify({ status: 'failed', error: String(error) })
+          result.dataset.status = 'failed'
+        }
+      })()
+    </script>
+  </body>
+</html>

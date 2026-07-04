@@ -26,7 +26,7 @@ export function extractNumberedOptions(text: string): { num: string; label: stri
   }
   if (opts.length < 2) return []
   // Descriptive lists (labels with '：') are informational, not interactive choices
-  const descriptive = opts.filter(o => o.label.includes('：')).length
+  const descriptive = opts.filter((o) => o.label.includes('：')).length
   if (descriptive > opts.length / 2) return []
   return opts
 }

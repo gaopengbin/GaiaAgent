@@ -14,7 +14,10 @@ const ThemeContext = createContext<ThemeContextValue>({
   setTheme: () => {},
 })
 
-export function ThemeProvider({ children, defaultTheme = 'dark' }: {
+export function ThemeProvider({
+  children,
+  defaultTheme = 'dark',
+}: {
   children: React.ReactNode
   defaultTheme?: Theme
 }) {
@@ -22,9 +25,12 @@ export function ThemeProvider({ children, defaultTheme = 'dark' }: {
     return (localStorage.getItem('theme') as Theme) ?? defaultTheme
   })
 
-  const resolvedTheme: 'light' | 'dark' = theme === 'system'
-    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    : theme
+  const resolvedTheme: 'light' | 'dark' =
+    theme === 'system'
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+      : theme
 
   useEffect(() => {
     const root = document.documentElement

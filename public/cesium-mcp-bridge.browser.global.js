@@ -633,7 +633,7 @@ var CesiumMcpBridge = (function (exports) {
   });
 
   // src/bridge.ts
-  var Cesium10 = __toESM(require_cesium());
+  var Cesium11 = __toESM(require_cesium());
 
   // src/commands/view.ts
   var Cesium2 = __toESM(require_cesium());
@@ -707,7 +707,6 @@ var CesiumMcpBridge = (function (exports) {
       height = 5e4,
       heading = 0,
       pitch = -45,
-      roll = 0,
       duration = 2
     } = params;
     validateCoordinate(longitude, latitude, height);
@@ -726,7 +725,7 @@ var CesiumMcpBridge = (function (exports) {
     });
   }
   function setView(viewer, params) {
-    const { longitude, latitude, height = 5e4, heading = 0, pitch = -45, roll = 0 } = params;
+    const { longitude, latitude, height = 5e4, heading = 0, pitch = -45 } = params;
     validateCoordinate(longitude, latitude, height);
     const target = Cesium2.Cartesian3.fromDegrees(longitude, latitude, 0);
     const range = _heightToRange(height, pitch);
@@ -857,7 +856,7 @@ var CesiumMcpBridge = (function (exports) {
       if (!data && !url) throw new Error('Either "data" or "url" must be provided');
       const layerId = id ?? `layer_${Date.now()}`;
       const layerName = name ?? layerId;
-      const color = style?.color ?? "#3B82F6";
+      const color = style?.color ?? DEFAULT_LAYER_COLOR;
       const opacity = style?.opacity ?? 0.6;
       const pointSize = style?.pointSize ?? 10;
       this.removeLayer(layerId);
@@ -871,8 +870,10 @@ var CesiumMcpBridge = (function (exports) {
         clampToGround: true
       });
       ds.name = layerName;
-      const circleImage = createCircleImage(pointSize * 2, color, opacity);
+      const circleImage = createCircleImage(pointSize * 2, "#FFFFFF", 1);
       const entities = ds.entities.values;
+      const styleEntities = [...entities];
+      const polygonOutlines = /* @__PURE__ */ new Map();
       const labelField = params.labelField;
       const ls = params.labelStyle;
       const labelFont = ls?.font ?? "12px sans-serif";
@@ -884,6 +885,7 @@ var CesiumMcpBridge = (function (exports) {
         const e = entities[i];
         if (e.billboard) {
           e.billboard.image = new Cesium3.ConstantProperty(circleImage);
+          e.billboard.color = new Cesium3.ConstantProperty(cesiumColor);
           e.billboard.width = new Cesium3.ConstantProperty(pointSize * 2);
           e.billboard.height = new Cesium3.ConstantProperty(pointSize * 2);
           e.billboard.heightReference = new Cesium3.ConstantProperty(Cesium3.HeightReference.CLAMP_TO_GROUND);
@@ -914,8 +916,9 @@ var CesiumMcpBridge = (function (exports) {
         if (e.polygon) {
           const hierarchy = e.polygon.hierarchy?.getValue(Cesium3.JulianDate.now());
           if (hierarchy?.positions) {
+            const outlines = [];
             const positions = [...hierarchy.positions, hierarchy.positions[0]];
-            ds.entities.add({
+            const outline = ds.entities.add({
               polyline: {
                 positions,
                 width: strokeWidth,
@@ -923,10 +926,11 @@ var CesiumMcpBridge = (function (exports) {
                 clampToGround: true
               }
             });
+            outlines.push(outline);
             if (hierarchy.holes) {
               for (const hole of hierarchy.holes) {
                 if (hole.positions) {
-                  ds.entities.add({
+                  const holeOutline = ds.entities.add({
                     polyline: {
                       positions: [...hole.positions, hole.positions[0]],
                       width: strokeWidth,
@@ -934,25 +938,27 @@ var CesiumMcpBridge = (function (exports) {
                       clampToGround: true
                     }
                   });
+                  outlines.push(holeOutline);
                 }
               }
             }
+            if (outlines.length) polygonOutlines.set(e, outlines);
           }
         }
       }
       const choropleth = style?.choropleth;
       if (choropleth?.field && choropleth?.breaks && choropleth?.colors) {
-        applyChoroplethStyle(ds, choropleth.field, choropleth.breaks, choropleth.colors, opacity);
+        applyChoroplethStyle(styleEntities, choropleth.field, choropleth.breaks, choropleth.colors, opacity, polygonOutlines);
       }
       const category = style?.category;
       if (category?.field) {
-        applyCategoryStyle(ds, category.field, category.colors, opacity);
+        applyCategoryStyle(styleEntities, category.field, category.colors, opacity, polygonOutlines);
       }
       if (style?.randomColor) {
-        applyRandomColorStyle(ds, opacity);
+        applyRandomColorStyle(styleEntities, opacity, polygonOutlines);
       }
       if (style?.gradient) {
-        applyGradientStyle(ds, style.gradient, opacity);
+        applyGradientStyle(styleEntities, style.gradient, opacity, polygonOutlines);
       }
       this._viewer.dataSources.add(ds);
       const geomType = data ? detectGeometryType(data) : detectGeometryTypeFromDataSource(ds);
@@ -964,10 +970,45 @@ var CesiumMcpBridge = (function (exports) {
         color,
         dataRefId
       };
-      this._cesiumRefs.set(layerId, { dataSource: ds });
+      this._cesiumRefs.set(layerId, { dataSource: ds, styleEntities, polygonOutlines });
       this._layers.push(info);
       this._viewer.flyTo(ds, { duration: 1.5 });
       return info;
+    }
+    // ==================== addGeoJsonPrimitive ====================
+    async addGeoJsonPrimitive(params) {
+      const { id, name, data, url, allowPicking, show } = params;
+      if (!data && !url) throw new Error('Either "data" or "url" must be provided');
+      const layerId = id ?? `geojson_prim_${Date.now()}`;
+      const layerName = name ?? layerId;
+      this.removeLayer(layerId);
+      const opts = {};
+      if (allowPicking !== void 0) opts.allowPicking = allowPicking;
+      if (show !== void 0) opts.show = show;
+      const GeoJsonPrimitive2 = Cesium3.GeoJsonPrimitive;
+      if (!GeoJsonPrimitive2) {
+        throw new Error("GeoJsonPrimitive is not available in this CesiumJS version");
+      }
+      let primitive;
+      if (url) {
+        primitive = await GeoJsonPrimitive2.fromUrl(url, opts);
+      } else {
+        primitive = GeoJsonPrimitive2.fromGeoJson(data, opts);
+      }
+      this._viewer.scene.primitives.add(primitive);
+      const featureCount = primitive.featureCount ?? 0;
+      const info = {
+        id: layerId,
+        name: layerName,
+        type: "geojson-primitive",
+        visible: show !== false,
+        color: "#10B981"
+      };
+      this._cesiumRefs.set(layerId, { primitive });
+      this._layers.push(info);
+      this._viewer.flyTo(primitive, { duration: 1.5 }).catch(() => {
+      });
+      return { ...info, featureCount };
     }
     // ==================== addHeatmap ====================
     async addHeatmap(params) {
@@ -1054,6 +1095,7 @@ var CesiumMcpBridge = (function (exports) {
           for (const e of refs.labelEntities) this._viewer.entities.remove(e);
         }
         if (refs.tileset) this._viewer.scene.primitives.remove(refs.tileset);
+        if (refs.primitive) this._viewer.scene.primitives.remove(refs.primitive);
         if (refs.imageryLayer) this._viewer.imageryLayers.remove(refs.imageryLayer);
         if (refs.movingEntity) this._viewer.entities.remove(refs.movingEntity);
         if (refs.trailEntity) this._viewer.entities.remove(refs.trailEntity);
@@ -1085,6 +1127,7 @@ var CesiumMcpBridge = (function (exports) {
         for (const e of refs.labelEntities) e.show = visible;
       }
       if (refs.tileset) refs.tileset.show = visible;
+      if (refs.primitive) refs.primitive.show = visible;
       if (refs.imageryLayer) refs.imageryLayer.show = visible;
       if (refs.movingEntity) refs.movingEntity.show = visible;
       if (refs.trailEntity) refs.trailEntity.show = visible;
@@ -1112,6 +1155,10 @@ var CesiumMcpBridge = (function (exports) {
       }
       if (refs.tileset) {
         this._viewer.flyTo(refs.tileset);
+        return;
+      }
+      if (refs.primitive) {
+        this._viewer.flyTo(refs.primitive);
         return;
       }
       if (refs.movingEntity) {
@@ -1168,37 +1215,26 @@ var CesiumMcpBridge = (function (exports) {
       const gs = params.layerStyle;
       if (gs && refs?.dataSource) {
         const ds = refs.dataSource;
-        const entities = ds.entities.values;
-        const color = gs.color ? parseColor(gs.color) : null;
-        const opacity = gs.opacity ?? 0.6;
-        for (const entity of entities) {
-          if (entity.polyline) {
-            if (color) entity.polyline.material = new Cesium3.ColorMaterialProperty(color.withAlpha(opacity));
-            if (gs.strokeWidth !== void 0) entity.polyline.width = new Cesium3.ConstantProperty(gs.strokeWidth);
-          }
-          if (entity.polygon) {
-            if (color) {
-              entity.polygon.material = new Cesium3.ColorMaterialProperty(color.withAlpha(opacity * 0.4));
-              entity.polygon.outlineColor = new Cesium3.ConstantProperty(color);
-            }
-          }
-          if (entity.billboard) {
-            const newSize = gs.pointSize ?? void 0;
-            const newColor = color ?? void 0;
-            if (newColor || newSize) {
-              const cssCol = gs.color ?? layer.color ?? "#3B82F6";
-              const sz = newSize ?? 10;
-              entity.billboard.image = new Cesium3.ConstantProperty(createCircleImage(sz * 2, cssCol, opacity));
-              entity.billboard.width = new Cesium3.ConstantProperty(sz * 2);
-              entity.billboard.height = new Cesium3.ConstantProperty(sz * 2);
-            }
-          }
-          if (entity.point) {
-            if (color) entity.point.color = new Cesium3.ConstantProperty(color.withAlpha(opacity));
-            if (gs.pointSize !== void 0) entity.point.pixelSize = new Cesium3.ConstantProperty(gs.pointSize);
-          }
-        }
+        if (!isValidLayerStyleForUpdate(gs)) return false;
+        if (hasThematicStyle(gs) && !refs.styleEntities) return false;
+        applyBasicLayerStyle(ds.entities.values, gs, layer.color, refs.polygonOutlines);
+        applyThematicLayerStyle(gs, refs.styleEntities ?? ds.entities.values, refs.polygonOutlines);
         if (gs.color) layer.color = gs.color;
+        return true;
+      }
+      const imageryStyle = params.imageryStyle;
+      if (imageryStyle && refs?.imageryLayer) {
+        if (!isValidImageryLayerStyle(imageryStyle)) return false;
+        applyImageryLayerStyle(refs.imageryLayer, imageryStyle);
+        this._viewer.scene.requestRender?.();
+        return true;
+      }
+      const primitiveStyle = params.primitiveStyle;
+      if (primitiveStyle && refs?.primitive) {
+        if (!isValidPrimitiveLayerStyle(primitiveStyle)) return false;
+        applyGeoJsonPrimitiveStyle(refs.primitive, primitiveStyle);
+        this._viewer.scene.requestRender?.();
+        if (primitiveStyle.color) layer.color = primitiveStyle.color;
         return true;
       }
       const ts = params.tileStyle;
@@ -1362,6 +1398,29 @@ var CesiumMcpBridge = (function (exports) {
       this._layers.push(info);
       return info;
     }
+    // ==================== addGaussianSplat ====================
+    async addGaussianSplat(params) {
+      const { id, name, url, maximumScreenSpaceError = 16, show = true } = params;
+      const layerId = id ?? `gaussian_splat_${Date.now()}`;
+      const layerName = name ?? "3D Gaussian Splat";
+      this.removeLayer(layerId);
+      const tileset = await Cesium3.Cesium3DTileset.fromUrl(url, {
+        maximumScreenSpaceError
+      });
+      tileset.show = show;
+      this._viewer.scene.primitives.add(tileset);
+      this._viewer.flyTo(tileset, { duration: 1.5 });
+      const info = {
+        id: layerId,
+        name: layerName,
+        type: "3d-gaussian-splat",
+        visible: show,
+        color: "#10B981"
+      };
+      this._cesiumRefs.set(layerId, { tileset });
+      this._layers.push(info);
+      return info;
+    }
     loadTerrain(params) {
       const { provider, url, cesiumIonAssetId } = params;
       const onError = (e) => console.error("[CesiumBridge] loadTerrain failed:", e);
@@ -1389,7 +1448,6 @@ var CesiumMcpBridge = (function (exports) {
       if (!url && !ionAssetId) throw new Error('Either "url" or "ionAssetId" must be provided');
       let imageryLayer;
       if (ionAssetId) {
-        await Cesium3.IonResource.fromAssetId(ionAssetId);
         const provider = await Cesium3.IonImageryProvider.fromAssetId(ionAssetId);
         imageryLayer = this._viewer.imageryLayers.addImageryProvider(provider);
       } else {
@@ -1530,8 +1588,196 @@ var CesiumMcpBridge = (function (exports) {
       return basemap;
     }
   };
-  function applyChoroplethStyle(ds, field, breaks, colors, opacity) {
-    const entities = ds.entities.values;
+  var DEFAULT_LAYER_COLOR = "#3B82F6";
+  var POLYGON_FILL_ALPHA_RATIO = 0.4;
+  var IMAGERY_LAYER_STYLE_KEYS = [
+    "alpha",
+    "brightness",
+    "contrast",
+    "hue",
+    "saturation",
+    "gamma"
+  ];
+  function isFiniteNumber(value) {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+  function isInRange(value, min, max) {
+    return value >= min && value <= max;
+  }
+  function countThematicStyles(style) {
+    return [
+      style.choropleth !== void 0,
+      style.category !== void 0,
+      style.randomColor === true,
+      style.gradient !== void 0
+    ].filter(Boolean).length;
+  }
+  function hasThematicStyle(style) {
+    return countThematicStyles(style) > 0;
+  }
+  function isValidLayerStyleForUpdate(style) {
+    if (countThematicStyles(style) > 1) return false;
+    if (style.opacity !== void 0 && (!isFiniteNumber(style.opacity) || !isInRange(style.opacity, 0, 1))) return false;
+    if (style.pointSize !== void 0 && (!isFiniteNumber(style.pointSize) || style.pointSize < 0)) return false;
+    if (style.strokeWidth !== void 0 && (!isFiniteNumber(style.strokeWidth) || style.strokeWidth < 0)) return false;
+    if (style.gradient !== void 0 && style.gradient.length !== 2) return false;
+    if (style.category !== void 0 && !style.category.field) return false;
+    const choropleth = style.choropleth;
+    if (choropleth) {
+      if (!choropleth.field || choropleth.breaks.length < 2) return false;
+      if (choropleth.colors.length !== choropleth.breaks.length - 1) return false;
+      for (let i = 0; i < choropleth.breaks.length; i++) {
+        const current = choropleth.breaks[i];
+        if (!isFiniteNumber(current)) return false;
+        if (i > 0 && current <= choropleth.breaks[i - 1]) return false;
+      }
+    }
+    return true;
+  }
+  function applyBasicLayerStyle(entities, style, fallbackColor, polygonOutlines) {
+    const shouldUpdateColor = style.color !== void 0 || style.opacity !== void 0;
+    const baseColor = shouldUpdateColor ? parseColor(style.color ?? fallbackColor) : void 0;
+    const alpha = style.opacity ?? baseColor?.alpha;
+    const fillColor = baseColor && alpha !== void 0 ? baseColor.withAlpha(alpha) : void 0;
+    const polygonFillColor = fillColor ? baseColor.withAlpha(alpha * POLYGON_FILL_ALPHA_RATIO) : void 0;
+    const lineMaterial = fillColor ? new Cesium3.ColorMaterialProperty(fillColor) : void 0;
+    const fillMaterial = polygonFillColor ? new Cesium3.ColorMaterialProperty(polygonFillColor) : void 0;
+    const fillColorProp = fillColor ? new Cesium3.ConstantProperty(fillColor) : void 0;
+    const strokeWidthProp = style.strokeWidth !== void 0 ? new Cesium3.ConstantProperty(style.strokeWidth) : void 0;
+    const billboardSizeProp = style.pointSize !== void 0 ? new Cesium3.ConstantProperty(style.pointSize * 2) : void 0;
+    const pointSizeProp = style.pointSize !== void 0 ? new Cesium3.ConstantProperty(style.pointSize) : void 0;
+    for (const entity of entities) {
+      if (entity.polyline) {
+        if (lineMaterial) entity.polyline.material = lineMaterial;
+        if (strokeWidthProp) entity.polyline.width = strokeWidthProp;
+      }
+      if (entity.polygon) {
+        if (fillMaterial && fillColorProp) {
+          entity.polygon.material = fillMaterial;
+          entity.polygon.outlineColor = fillColorProp;
+        }
+        syncPolygonOutlines(entity, fillColor, style.strokeWidth, polygonOutlines);
+      }
+      if (entity.billboard) {
+        if (fillColorProp) entity.billboard.color = fillColorProp;
+        if (billboardSizeProp) {
+          entity.billboard.width = billboardSizeProp;
+          entity.billboard.height = billboardSizeProp;
+        }
+      }
+      if (entity.point) {
+        if (fillColorProp) entity.point.color = fillColorProp;
+        if (pointSizeProp) entity.point.pixelSize = pointSizeProp;
+      }
+    }
+  }
+  function applyThematicLayerStyle(style, entities, polygonOutlines) {
+    const opacity = style.opacity ?? 0.6;
+    const choropleth = style.choropleth;
+    if (choropleth) {
+      applyChoroplethStyle(entities, choropleth.field, choropleth.breaks, choropleth.colors, opacity, polygonOutlines);
+      return;
+    }
+    const category = style.category;
+    if (category) {
+      applyCategoryStyle(entities, category.field, category.colors, opacity, polygonOutlines);
+      return;
+    }
+    if (style.randomColor) {
+      applyRandomColorStyle(entities, opacity, polygonOutlines);
+      return;
+    }
+    if (style.gradient) {
+      applyGradientStyle(entities, style.gradient, opacity, polygonOutlines);
+    }
+  }
+  function isValidImageryLayerStyle(style) {
+    const hasField = IMAGERY_LAYER_STYLE_KEYS.some((key) => style[key] !== void 0);
+    if (!hasField) return false;
+    for (const key of IMAGERY_LAYER_STYLE_KEYS) {
+      const value = style[key];
+      if (value === void 0) continue;
+      if (!isFiniteNumber(value)) return false;
+      if (key === "alpha" && !isInRange(value, 0, 1)) return false;
+    }
+    return true;
+  }
+  function applyImageryLayerStyle(layer, style) {
+    for (const key of IMAGERY_LAYER_STYLE_KEYS) {
+      const value = style[key];
+      if (value !== void 0) {
+        layer[key] = value;
+      }
+    }
+  }
+  function isValidPrimitiveLayerStyle(style) {
+    const hasField = [
+      style.color,
+      style.opacity,
+      style.outlineColor,
+      style.outlineWidth,
+      style.pointSize,
+      style.lineWidth
+    ].some((value) => value !== void 0);
+    if (!hasField) return false;
+    if (style.opacity !== void 0 && (!isFiniteNumber(style.opacity) || !isInRange(style.opacity, 0, 1))) return false;
+    if (style.outlineWidth !== void 0 && (!isFiniteNumber(style.outlineWidth) || !isInRange(style.outlineWidth, 0, 255))) return false;
+    if (style.pointSize !== void 0 && (!isFiniteNumber(style.pointSize) || !isInRange(style.pointSize, 0, 255))) return false;
+    if (style.lineWidth !== void 0 && (!isFiniteNumber(style.lineWidth) || !isInRange(style.lineWidth, 0, 255))) return false;
+    return true;
+  }
+  function applyGeoJsonPrimitiveStyle(primitive, style) {
+    const C = Cesium3;
+    if (primitive.points && C.BufferPoint && C.BufferPointMaterial) {
+      applyPrimitiveCollectionStyle(
+        primitive.points,
+        new C.BufferPoint(),
+        new C.BufferPointMaterial(),
+        style,
+        "point"
+      );
+    }
+    if (primitive.polylines && C.BufferPolyline && C.BufferPolylineMaterial) {
+      applyPrimitiveCollectionStyle(
+        primitive.polylines,
+        new C.BufferPolyline(),
+        new C.BufferPolylineMaterial(),
+        style,
+        "polyline"
+      );
+    }
+    if (primitive.polygons && C.BufferPolygon && C.BufferPolygonMaterial) {
+      applyPrimitiveCollectionStyle(
+        primitive.polygons,
+        new C.BufferPolygon(),
+        new C.BufferPolygonMaterial(),
+        style,
+        "polygon"
+      );
+    }
+  }
+  function applyPrimitiveCollectionStyle(collection, element, material, style, target) {
+    const color = style.color ? parseColor(style.color) : void 0;
+    const outlineColor = style.outlineColor ? parseColor(style.outlineColor) : void 0;
+    const count = collection.primitiveCount ?? 0;
+    for (let i = 0; i < count; i++) {
+      collection.get(i, element);
+      element.getMaterial(material);
+      if (color) {
+        material.color = color.withAlpha(style.opacity ?? color.alpha);
+      } else if (style.opacity !== void 0 && material.color) {
+        material.color = material.color.withAlpha(style.opacity);
+      }
+      if (outlineColor) material.outlineColor = outlineColor;
+      if (style.outlineWidth !== void 0) material.outlineWidth = style.outlineWidth;
+      if (target === "point" && style.pointSize !== void 0) material.size = style.pointSize;
+      if (target === "polyline" && style.lineWidth !== void 0) material.width = style.lineWidth;
+      element.setMaterial(material);
+    }
+  }
+  function applyChoroplethStyle(entities, field, breaks, colors, opacity, polygonOutlines) {
+    const fillColors = colors.map((c) => parseColor(c ?? DEFAULT_LAYER_COLOR).withAlpha(opacity));
+    const strokeColor = parseColor("#333333").withAlpha(0.6);
     for (const entity of entities) {
       const props = entity.properties;
       if (!props) continue;
@@ -1545,19 +1791,7 @@ var CesiumMcpBridge = (function (exports) {
           break;
         }
       }
-      const fillColor = parseColor(colors[classIdx] ?? "#3B82F6").withAlpha(opacity);
-      const strokeColor = parseColor("#333333").withAlpha(0.6);
-      if (entity.polygon) {
-        entity.polygon.material = new Cesium3.ColorMaterialProperty(fillColor);
-        entity.polygon.outlineColor = new Cesium3.ConstantProperty(strokeColor);
-        entity.polygon.outlineWidth = new Cesium3.ConstantProperty(1);
-      } else if (entity.polyline) {
-        entity.polyline.material = new Cesium3.ColorMaterialProperty(fillColor);
-      } else if (entity.point) {
-        entity.point.color = new Cesium3.ConstantProperty(fillColor);
-      } else if (entity.billboard) {
-        entity.billboard.color = new Cesium3.ConstantProperty(fillColor);
-      }
+      applyColorToEntity(entity, fillColors[classIdx], strokeColor, polygonOutlines);
     }
   }
   var CATEGORY_PALETTE = [
@@ -1574,48 +1808,49 @@ var CesiumMcpBridge = (function (exports) {
     "#E11D48",
     "#84CC16"
   ];
-  function applyCategoryStyle(ds, field, customColors, opacity) {
+  function getCategoryIndex(raw, categoryIndexes) {
+    if (raw === void 0 || raw === null) return -1;
+    if (typeof raw === "number" && Number.isFinite(raw)) return Math.trunc(raw);
+    const text = String(raw).trim();
+    if (!text) return -1;
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) return Math.trunc(numeric);
+    if (!categoryIndexes.has(text)) {
+      categoryIndexes.set(text, categoryIndexes.size);
+    }
+    return categoryIndexes.get(text);
+  }
+  function applyCategoryStyle(entities, field, customColors, opacity, polygonOutlines) {
     const palette = customColors?.length ? customColors : CATEGORY_PALETTE;
-    const entities = ds.entities.values;
+    const fillColors = palette.map((c) => parseColor(c).withAlpha(opacity));
+    const strokeColors = palette.map((c) => parseColor(c).withAlpha(Math.min(opacity + 0.2, 1)));
+    const noiseFill = parseColor("#6B7280").withAlpha(opacity);
+    const noiseStroke = parseColor("#6B7280").withAlpha(Math.min(opacity + 0.2, 1));
+    const categoryIndexes = /* @__PURE__ */ new Map();
     for (const entity of entities) {
       const props = entity.properties;
       if (!props) continue;
       const raw = props[field]?.getValue(Cesium3.JulianDate.now());
-      const val = raw !== void 0 && raw !== null ? Number(raw) : -1;
-      const cssColor = val < 0 ? "#6B7280" : palette[val % palette.length] ?? "#6B7280";
-      const fillColor = parseColor(cssColor).withAlpha(opacity);
-      const strokeColor = parseColor(cssColor).withAlpha(Math.min(opacity + 0.2, 1));
-      if (entity.point) {
-        entity.point.color = new Cesium3.ConstantProperty(fillColor);
-        entity.point.pixelSize = new Cesium3.ConstantProperty(10);
-        entity.point.outlineColor = new Cesium3.ConstantProperty(strokeColor);
-        entity.point.outlineWidth = new Cesium3.ConstantProperty(1);
-      } else if (entity.billboard) {
-        entity.billboard.color = new Cesium3.ConstantProperty(fillColor);
-      } else if (entity.polygon) {
-        entity.polygon.material = new Cesium3.ColorMaterialProperty(fillColor);
-        entity.polygon.outlineColor = new Cesium3.ConstantProperty(strokeColor);
-      } else if (entity.polyline) {
-        entity.polyline.material = new Cesium3.ColorMaterialProperty(fillColor);
-        entity.polyline.width = new Cesium3.ConstantProperty(3);
-      }
+      const val = getCategoryIndex(raw, categoryIndexes);
+      const idx = val < 0 ? -1 : val % palette.length;
+      const fillColor = idx < 0 ? noiseFill : fillColors[idx];
+      const strokeColor = idx < 0 ? noiseStroke : strokeColors[idx];
+      applyColorToEntity(entity, fillColor, strokeColor, polygonOutlines);
     }
   }
-  function applyRandomColorStyle(ds, opacity) {
-    const entities = ds.entities.values;
+  function applyRandomColorStyle(entities, opacity, polygonOutlines) {
     for (const entity of entities) {
       const hue = Math.random();
       const sat = 0.5 + Math.random() * 0.4;
       const light = 0.4 + Math.random() * 0.25;
       const fillColor = Cesium3.Color.fromHsl(hue, sat, light, opacity);
       const strokeColor = Cesium3.Color.fromHsl(hue, sat, light, Math.min(opacity + 0.3, 1));
-      applyColorToEntity(entity, fillColor, strokeColor);
+      applyColorToEntity(entity, fillColor, strokeColor, polygonOutlines);
     }
   }
-  function applyGradientStyle(ds, gradient, opacity) {
+  function applyGradientStyle(entities, gradient, opacity, polygonOutlines) {
     const startColor = parseColor(gradient[0]);
     const endColor = parseColor(gradient[1]);
-    const entities = ds.entities.values;
     const total = Math.max(entities.length - 1, 1);
     for (let i = 0; i < entities.length; i++) {
       const t = i / total;
@@ -1624,19 +1859,29 @@ var CesiumMcpBridge = (function (exports) {
       const b = startColor.blue + (endColor.blue - startColor.blue) * t;
       const fillColor = new Cesium3.Color(r, g, b, opacity);
       const strokeColor = new Cesium3.Color(r, g, b, Math.min(opacity + 0.3, 1));
-      applyColorToEntity(entities[i], fillColor, strokeColor);
+      applyColorToEntity(entities[i], fillColor, strokeColor, polygonOutlines);
     }
   }
-  function applyColorToEntity(entity, fillColor, strokeColor) {
+  function applyColorToEntity(entity, fillColor, strokeColor, polygonOutlines) {
     if (entity.polygon) {
       entity.polygon.material = new Cesium3.ColorMaterialProperty(fillColor);
       entity.polygon.outlineColor = new Cesium3.ConstantProperty(strokeColor);
+      syncPolygonOutlines(entity, strokeColor, void 0, polygonOutlines);
     } else if (entity.polyline) {
       entity.polyline.material = new Cesium3.ColorMaterialProperty(fillColor);
     } else if (entity.point) {
       entity.point.color = new Cesium3.ConstantProperty(fillColor);
     } else if (entity.billboard) {
       entity.billboard.color = new Cesium3.ConstantProperty(fillColor);
+    }
+  }
+  function syncPolygonOutlines(entity, strokeColor, strokeWidth, polygonOutlines) {
+    const outlines = polygonOutlines?.get(entity);
+    if (!outlines) return;
+    for (const outline of outlines) {
+      if (!outline.polyline) continue;
+      if (strokeColor) outline.polyline.material = new Cesium3.ColorMaterialProperty(strokeColor);
+      if (strokeWidth !== void 0) outline.polyline.width = new Cesium3.ConstantProperty(strokeWidth);
     }
   }
   function detectGeometryType(geojson) {
@@ -1757,10 +2002,12 @@ var CesiumMcpBridge = (function (exports) {
     return entities;
   }
   function addMarker(viewer, params) {
-    const { longitude, latitude, label, color = "#3B82F6", size = 12 } = params;
+    const { id, longitude, latitude, label, color = "#3B82F6", size = 12, show = true } = params;
     validateCoordinate(longitude, latitude);
     const cesiumColor = parseColor(color);
     return viewer.entities.add({
+      id,
+      show,
       position: Cesium4.Cartesian3.fromDegrees(longitude, latitude),
       point: {
         pixelSize: size,
@@ -1785,7 +2032,7 @@ var CesiumMcpBridge = (function (exports) {
     });
   }
   function addPolyline(viewer, params) {
-    const { coordinates, color = "#3B82F6", width = 3, clampToGround = true, label } = params;
+    const { id, coordinates, color = "#3B82F6", width = 3, clampToGround = true, label, show = true } = params;
     const cesiumColor = parseColor(color);
     const positions = coordinates.map((c) => {
       validateCoordinate(c[0], c[1], c[2]);
@@ -1793,6 +2040,8 @@ var CesiumMcpBridge = (function (exports) {
     });
     const midIdx = Math.floor(positions.length / 2);
     return viewer.entities.add({
+      id,
+      show,
       position: label ? positions[midIdx] : void 0,
       polyline: {
         positions,
@@ -1814,7 +2063,7 @@ var CesiumMcpBridge = (function (exports) {
     });
   }
   function addPolygon(viewer, params) {
-    const { coordinates, color = "#3B82F6", outlineColor = "#FFFFFF", opacity = 0.6, extrudedHeight, clampToGround = true, label } = params;
+    const { id, coordinates, color = "#3B82F6", outlineColor = "#FFFFFF", opacity = 0.6, extrudedHeight, clampToGround = true, label, show = true } = params;
     const fillColor = parseColor(color).withAlpha(opacity);
     const strokeColor = parseColor(outlineColor);
     const positions = coordinates.map((c) => {
@@ -1823,6 +2072,8 @@ var CesiumMcpBridge = (function (exports) {
     });
     const centroid = centroidOfCoords(coordinates.map((c) => [c[0], c[1]]));
     return viewer.entities.add({
+      id,
+      show,
       position: label && centroid ? Cesium4.Cartesian3.fromDegrees(centroid[0], centroid[1]) : void 0,
       polygon: {
         hierarchy: new Cesium4.PolygonHierarchy(positions),
@@ -1847,7 +2098,7 @@ var CesiumMcpBridge = (function (exports) {
     });
   }
   function addModel(viewer, params) {
-    const { longitude, latitude, height = 0, url, scale = 1, heading = 0, pitch = 0, roll = 0, label } = params;
+    const { id, longitude, latitude, height = 0, url, scale = 1, heading = 0, pitch = 0, roll = 0, label, show = true } = params;
     validateCoordinate(longitude, latitude, height);
     const position = Cesium4.Cartesian3.fromDegrees(longitude, latitude, height);
     const hpr = new Cesium4.HeadingPitchRoll(
@@ -1857,6 +2108,8 @@ var CesiumMcpBridge = (function (exports) {
     );
     const orientation = Cesium4.Transforms.headingPitchRollQuaternion(position, hpr);
     return viewer.entities.add({
+      id,
+      show,
       position,
       orientation,
       model: {
@@ -2148,6 +2401,7 @@ var CesiumMcpBridge = (function (exports) {
       }
       case "billboard": {
         const bb = entity.billboard;
+        props.image = tryGetValue(bb.image);
         props.width = tryGetValue(bb.width);
         props.height = tryGetValue(bb.height);
         props.scale = tryGetValue(bb.scale);
@@ -2764,6 +3018,8 @@ var CesiumMcpBridge = (function (exports) {
   function addBillboard(viewer, params) {
     const position = Cesium8.Cartesian3.fromDegrees(params.longitude, params.latitude, params.height ?? 0);
     return viewer.entities.add({
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       position,
       billboard: {
@@ -2781,6 +3037,8 @@ var CesiumMcpBridge = (function (exports) {
   function addBox(viewer, params) {
     const position = Cesium8.Cartesian3.fromDegrees(params.longitude, params.latitude, params.height ?? 0);
     const opts = {
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       position,
       box: {
@@ -2804,6 +3062,8 @@ var CesiumMcpBridge = (function (exports) {
   function addCorridor(viewer, params) {
     const posArray = params.positions.flatMap((p) => [p.longitude, p.latitude, p.height ?? 0]);
     return viewer.entities.add({
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       corridor: {
         positions: Cesium8.Cartesian3.fromDegreesArrayHeights(posArray),
@@ -2820,6 +3080,8 @@ var CesiumMcpBridge = (function (exports) {
   function addCylinder(viewer, params) {
     const position = Cesium8.Cartesian3.fromDegrees(params.longitude, params.latitude, params.height ?? 0);
     const opts = {
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       position,
       cylinder: {
@@ -2842,6 +3104,8 @@ var CesiumMcpBridge = (function (exports) {
   function addEllipse(viewer, params) {
     const position = Cesium8.Cartesian3.fromDegrees(params.longitude, params.latitude, params.height ?? 0);
     return viewer.entities.add({
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       position,
       ellipse: {
@@ -2861,6 +3125,8 @@ var CesiumMcpBridge = (function (exports) {
   }
   function addRectangle(viewer, params) {
     return viewer.entities.add({
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       rectangle: {
         coordinates: Cesium8.Rectangle.fromDegrees(params.west, params.south, params.east, params.north),
@@ -2878,6 +3144,8 @@ var CesiumMcpBridge = (function (exports) {
   function addWall(viewer, params) {
     const posArray = params.positions.flatMap((p) => [p.longitude, p.latitude, p.height ?? 0]);
     return viewer.entities.add({
+      id: params.id,
+      show: params.show ?? true,
       name: params.name,
       wall: {
         positions: Cesium8.Cartesian3.fromDegreesArrayHeights(posArray),
@@ -3040,6 +3308,7 @@ var CesiumMcpBridge = (function (exports) {
   }
 
   // src/commands/scene.ts
+  var Cesium10 = __toESM(require_cesium());
   function setSceneOptions(viewer, params) {
     const { scene } = viewer;
     if (params.fogEnabled !== void 0) scene.fog.enabled = params.fogEnabled;
@@ -3083,6 +3352,35 @@ var CesiumMcpBridge = (function (exports) {
     }
     if (params.fxaa !== void 0) stages.fxaa.enabled = params.fxaa;
   }
+  var EDGE_MODE_MAP = {
+    surfaces_only: Cesium10.EdgeDisplayMode.SURFACES_ONLY,
+    surfaces_and_edges: Cesium10.EdgeDisplayMode.SURFACES_AND_EDGES,
+    edges_only: Cesium10.EdgeDisplayMode.EDGES_ONLY
+  };
+  function setEdgeDisplayMode(viewer, layerManager, params) {
+    const mode = EDGE_MODE_MAP[params.mode];
+    if (mode === void 0) {
+      throw new Error(`Invalid edge display mode: ${params.mode}`);
+    }
+    let applied = 0;
+    if (params.tilesetId) {
+      const refs = layerManager.getCesiumRefs(params.tilesetId);
+      if (refs?.tileset) {
+        refs.tileset.edgeDisplayMode = mode;
+        applied = 1;
+      }
+    } else {
+      const primitives = viewer.scene.primitives;
+      for (let i = 0; i < primitives.length; i++) {
+        const p = primitives.get(i);
+        if (p instanceof Cesium10.Cesium3DTileset) {
+          p.edgeDisplayMode = mode;
+          applied++;
+        }
+      }
+    }
+    return { applied };
+  }
 
   // src/bridge.ts
   var CesiumBridge = class {
@@ -3120,6 +3418,10 @@ var CesiumMcpBridge = (function (exports) {
           case "addGeoJsonLayer": {
             const info = await this.addGeoJsonLayer(p);
             return { success: true, data: info, message: `GeoJSON layer '${info.name}' added` };
+          }
+          case "addGeoJsonPrimitive": {
+            const info = await this.addGeoJsonPrimitive(p);
+            return { success: true, data: info, message: `GeoJSON primitive '${info.name}' added` };
           }
           case "addHeatmap": {
             const info = await this.addHeatmap(p);
@@ -3185,6 +3487,10 @@ var CesiumMcpBridge = (function (exports) {
           case "load3dTiles": {
             const info = await this.load3dTiles(p);
             return { success: true, data: info, message: `3D Tiles '${info.name}' loaded` };
+          }
+          case "load3dGaussianSplat": {
+            const info = await this.load3dGaussianSplat(p);
+            return { success: true, data: info, message: `3D Gaussian Splat '${info.name}' loaded` };
           }
           case "loadTerrain":
             this.loadTerrain(p);
@@ -3291,8 +3597,12 @@ var CesiumMcpBridge = (function (exports) {
           case "setPostProcess":
             this.setPostProcess(p);
             return { success: true, message: "Post-processing effects updated" };
+          case "setEdgeDisplayMode": {
+            const result = this.setEdgeDisplayMode(p);
+            return { success: true, data: result, message: `Edge display mode set on ${result.applied} tileset(s)` };
+          }
           case "setIonToken":
-            Cesium10.Ion.defaultAccessToken = p.token;
+            Cesium11.Ion.defaultAccessToken = p.token;
             return { success: true, message: "Cesium Ion access token updated" };
           // ==================== Batch & Query ====================
           case "batchAddEntities": {
@@ -3350,6 +3660,9 @@ var CesiumMcpBridge = (function (exports) {
     addGeoJsonLayer(params) {
       return this._layerManager.addGeoJsonLayer(params);
     }
+    addGeoJsonPrimitive(params) {
+      return this._layerManager.addGeoJsonPrimitive(params);
+    }
     addHeatmap(params) {
       return this._layerManager.addHeatmap(params);
     }
@@ -3358,7 +3671,7 @@ var CesiumMcpBridge = (function (exports) {
       this._emit("layerRemoved", { id });
     }
     clearAll() {
-      for (const [id, t] of this._activeTrajectories) {
+      for (const [, t] of this._activeTrajectories) {
         t.stop();
       }
       this._activeTrajectories.clear();
@@ -3395,6 +3708,9 @@ var CesiumMcpBridge = (function (exports) {
     // ==================== 3D Scene ====================
     load3dTiles(params) {
       return this._layerManager.load3dTiles(params);
+    }
+    load3dGaussianSplat(params) {
+      return this._layerManager.addGaussianSplat(params);
     }
     loadTerrain(params) {
       this._layerManager.loadTerrain(params);
@@ -3485,28 +3801,28 @@ var CesiumMcpBridge = (function (exports) {
     _attachLabelsToDataSource(ds, params) {
       const { field, style } = params;
       const font = style?.font ?? "12px sans-serif";
-      const fillColor = style?.fillColor ? Cesium10.Color.fromCssColorString(style.fillColor) : Cesium10.Color.WHITE;
-      const outlineColor = style?.outlineColor ? Cesium10.Color.fromCssColorString(style.outlineColor) : Cesium10.Color.BLACK;
+      const fillColor = style?.fillColor ? Cesium11.Color.fromCssColorString(style.fillColor) : Cesium11.Color.WHITE;
+      const outlineColor = style?.outlineColor ? Cesium11.Color.fromCssColorString(style.outlineColor) : Cesium11.Color.BLACK;
       const outlineWidth = style?.outlineWidth ?? 2;
-      const pixelOffset = style?.pixelOffset ? new Cesium10.Cartesian2(style.pixelOffset[0], style.pixelOffset[1]) : new Cesium10.Cartesian2(0, -16);
+      const pixelOffset = style?.pixelOffset ? new Cesium11.Cartesian2(style.pixelOffset[0], style.pixelOffset[1]) : new Cesium11.Cartesian2(0, -16);
       let count = 0;
       const entities = ds.entities.values;
       for (let i = 0; i < entities.length; i++) {
         const e = entities[i];
         if (!e.properties || !e.position) continue;
-        const val = e.properties[field]?.getValue(Cesium10.JulianDate.now());
+        const val = e.properties[field]?.getValue(Cesium11.JulianDate.now());
         if (val == null || val === "") continue;
-        e.label = new Cesium10.LabelGraphics({
+        e.label = new Cesium11.LabelGraphics({
           text: String(val),
           font,
           fillColor,
           outlineColor,
           outlineWidth,
-          style: Cesium10.LabelStyle.FILL_AND_OUTLINE,
+          style: Cesium11.LabelStyle.FILL_AND_OUTLINE,
           pixelOffset,
           scale: style?.scale ?? 1,
-          verticalOrigin: Cesium10.VerticalOrigin.BOTTOM,
-          heightReference: Cesium10.HeightReference.CLAMP_TO_GROUND,
+          verticalOrigin: Cesium11.VerticalOrigin.BOTTOM,
+          heightReference: Cesium11.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY
         });
         count++;
@@ -3514,8 +3830,9 @@ var CesiumMcpBridge = (function (exports) {
       return count;
     }
     addMarker(params) {
+      const layerId = params.layerId ?? (params.id ? `marker_${params.id}` : `marker_${Date.now()}`);
+      this.removeLayer(layerId);
       const entity = addMarker(this._viewer, params);
-      const layerId = `marker_${Date.now()}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3529,8 +3846,9 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addPolyline(params) {
+      const layerId = params.layerId ?? (params.id ? `polyline_${params.id}` : `polyline_${Date.now()}`);
+      this.removeLayer(layerId);
       const entity = addPolyline(this._viewer, params);
-      const layerId = `polyline_${Date.now()}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3544,8 +3862,9 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addPolygon(params) {
+      const layerId = params.layerId ?? (params.id ? `polygon_${params.id}` : `polygon_${Date.now()}`);
+      this.removeLayer(layerId);
       const entity = addPolygon(this._viewer, params);
-      const layerId = `polygon_${Date.now()}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3559,8 +3878,9 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addModel(params) {
+      const layerId = params.layerId ?? (params.id ? `model_${params.id}` : `model_${Date.now()}`);
+      this.removeLayer(layerId);
       const entity = addModel(this._viewer, params);
-      const layerId = `model_${Date.now()}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3614,8 +3934,8 @@ var CesiumMcpBridge = (function (exports) {
       setCameraOptions(this._viewer, params);
     }
     // ==================== Entity Types (融合官方 Entity Server) ====================
-    _registerEntityLayer(entity, type, name, color) {
-      const layerId = `${type}_${Date.now()}`;
+    _registerEntityLayer(entity, type, name, color, layerIdHint) {
+      const layerId = layerIdHint ?? (entity.id ? `${type}_${entity.id}` : `${type}_${Date.now()}`);
       const info = {
         id: layerId,
         name: name ?? entity.name ?? layerId,
@@ -3629,25 +3949,39 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addBillboard(params) {
-      return this._registerEntityLayer(addBillboard(this._viewer, params), "billboard", params.name);
+      const layerId = params.layerId ?? (params.id ? `billboard_${params.id}` : `billboard_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addBillboard(this._viewer, params), "billboard", params.name, void 0, layerId);
     }
     addBox(params) {
-      return this._registerEntityLayer(addBox(this._viewer, params), "box", params.name);
+      const layerId = params.layerId ?? (params.id ? `box_${params.id}` : `box_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addBox(this._viewer, params), "box", params.name, void 0, layerId);
     }
     addCorridor(params) {
-      return this._registerEntityLayer(addCorridor(this._viewer, params), "corridor", params.name);
+      const layerId = params.layerId ?? (params.id ? `corridor_${params.id}` : `corridor_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addCorridor(this._viewer, params), "corridor", params.name, void 0, layerId);
     }
     addCylinder(params) {
-      return this._registerEntityLayer(addCylinder(this._viewer, params), "cylinder", params.name);
+      const layerId = params.layerId ?? (params.id ? `cylinder_${params.id}` : `cylinder_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addCylinder(this._viewer, params), "cylinder", params.name, void 0, layerId);
     }
     addEllipse(params) {
-      return this._registerEntityLayer(addEllipse(this._viewer, params), "ellipse", params.name);
+      const layerId = params.layerId ?? (params.id ? `ellipse_${params.id}` : `ellipse_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addEllipse(this._viewer, params), "ellipse", params.name, void 0, layerId);
     }
     addRectangle(params) {
-      return this._registerEntityLayer(addRectangle(this._viewer, params), "rectangle", params.name);
+      const layerId = params.layerId ?? (params.id ? `rectangle_${params.id}` : `rectangle_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addRectangle(this._viewer, params), "rectangle", params.name, void 0, layerId);
     }
     addWall(params) {
-      return this._registerEntityLayer(addWall(this._viewer, params), "wall", params.name);
+      const layerId = params.layerId ?? (params.id ? `wall_${params.id}` : `wall_${Date.now()}`);
+      this.removeLayer(layerId);
+      return this._registerEntityLayer(addWall(this._viewer, params), "wall", params.name, void 0, layerId);
     }
     // ==================== Animation (融合官方 Animation Server) ====================
     createAnimation(params) {
@@ -3700,6 +4034,9 @@ var CesiumMcpBridge = (function (exports) {
     setPostProcess(params) {
       setPostProcess(this._viewer, params);
     }
+    setEdgeDisplayMode(params) {
+      return setEdgeDisplayMode(this._viewer, this._layerManager, params);
+    }
     // ==================== Batch & Query ====================
     batchAddEntities(params) {
       return batchAddEntities(this._viewer, params.entities, {
@@ -3730,10 +4067,25 @@ var CesiumMcpBridge = (function (exports) {
       return listViewpoints();
     }
     exportScene() {
+      const entities = this.queryEntities({}).map((entity) => {
+        try {
+          const details = this.getEntityProperties({ entityId: entity.entityId });
+          return {
+            ...entity,
+            name: entity.name ?? details.name,
+            position: entity.position ?? details.position,
+            graphicProperties: details.graphicProperties,
+            properties: details.properties,
+            description: details.description
+          };
+        } catch {
+          return entity;
+        }
+      });
       return {
         view: this.getView(),
         layers: this.listLayers(),
-        entities: this.queryEntities({}),
+        entities,
         timestamp: (/* @__PURE__ */ new Date()).toISOString()
       };
     }

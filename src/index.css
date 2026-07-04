@@ -1,64 +1,73 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+@config "../tailwind.config.js";
 
 @layer base {
   /* ── Light theme (Figma zinc palette) ─────────────────────────── */
   :root {
-    --background:              0 0% 100%;         /* #FFFFFF */
-    --foreground:              240 10% 3.9%;       /* #09090B */
-    --card:                    0 0% 100%;
-    --card-foreground:         240 10% 3.9%;
-    --popover:                 0 0% 100%;
-    --popover-foreground:      240 10% 3.9%;
-    --primary:                 217 91% 60%;        /* blue-500 #3B82F6 – actions & user bubbles */
-    --primary-foreground:      0 0% 100%;
-    --secondary:               240 4.8% 95.9%;     /* #F4F4F5 */
-    --secondary-foreground:    240 5.9% 10%;
-    --muted:                   240 4.8% 95.9%;
-    --muted-foreground:        240 3.8% 46.1%;     /* #71717A */
-    --accent:                  240 4.8% 95.9%;
-    --accent-foreground:       240 5.9% 10%;
-    --destructive:             0 84.2% 60.2%;
-    --destructive-foreground:  0 0% 98%;
-    --border:                  240 5.9% 90%;       /* #E4E4E7 */
-    --input:                   240 5.9% 90%;
-    --ring:                    217 91% 60%;
-    --radius:                  0.5rem;
+    --background: 0 0% 100%; /* #FFFFFF */
+    --foreground: 240 10% 3.9%; /* #09090B */
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 217 91% 60%; /* blue-500 #3B82F6 – actions & user bubbles */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 4.8% 95.9%; /* #F4F4F5 */
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%; /* #71717A */
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%; /* #E4E4E7 */
+    --input: 240 5.9% 90%;
+    --ring: 217 91% 60%;
+    --radius: 0.5rem;
   }
 
   /* ── Dark theme (Figma zinc dark) ─────────────────────────────── */
   .dark {
-    --background:              240 10% 3.9%;       /* #09090B */
-    --foreground:              0 0% 98%;            /* #FAFAFA */
-    --card:                    240 10% 3.9%;
-    --card-foreground:         0 0% 98%;
-    --popover:                 240 10% 3.9%;
-    --popover-foreground:      0 0% 98%;
-    --primary:                 217 91% 60%;         /* blue-500 */
-    --primary-foreground:      0 0% 100%;
-    --secondary:               240 3.7% 15.9%;      /* #27272A */
-    --secondary-foreground:    0 0% 98%;
-    --muted:                   240 3.7% 15.9%;
-    --muted-foreground:        240 5% 64.9%;        /* #A1A1AA */
-    --accent:                  240 3.7% 15.9%;
-    --accent-foreground:       0 0% 98%;
-    --destructive:             0 62.8% 30.6%;
-    --destructive-foreground:  0 0% 98%;
-    --border:                  240 3.7% 15.9%;      /* #27272A */
-    --input:                   240 3.7% 15.9%;
-    --ring:                    217 91% 60%;
+    --background: 240 10% 3.9%; /* #09090B */
+    --foreground: 0 0% 98%; /* #FAFAFA */
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 217 91% 60%; /* blue-500 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 3.7% 15.9%; /* #27272A */
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%; /* #A1A1AA */
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%; /* #27272A */
+    --input: 240 3.7% 15.9%;
+    --ring: 217 91% 60%;
   }
 }
 
 @layer base {
-  * { @apply border-border; }
-  body { @apply bg-background text-foreground; }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
 }
 
-*, *::before, *::after { box-sizing: border-box; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   overflow: hidden;
   margin: 0;
@@ -67,19 +76,134 @@ html, body, #root {
 }
 
 /* Window close button */
-.close-btn:hover { background: #dc2626 !important; color: #fff !important; }
+.close-btn:hover {
+  background: #dc2626 !important;
+  color: #fff !important;
+}
 
 /* Cesium widget overrides */
-.cesium-widget-credits { display: none !important; }
-.cesium-viewer-bottom { display: none !important; }
+.cesium-widget-credits {
+  display: none !important;
+}
+.cesium-viewer-bottom {
+  display: none !important;
+}
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2e3348; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #3d4560; }
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e3348;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3d4560;
+}
 
 @keyframes blink {
-  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-  40%           { opacity: 1;   transform: scale(1); }
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes text-shimmer {
+  from {
+    background-position: 100% center;
+  }
+  to {
+    background-position: 0% center;
+  }
+}
+
+@keyframes gaia-grid-drift {
+  from {
+    background-position:
+      0 0,
+      0 0;
+  }
+  to {
+    background-position:
+      44px 44px,
+      -44px 22px;
+  }
+}
+
+@keyframes gaia-scan {
+  0%,
+  100% {
+    opacity: 0.12;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translateY(230px);
+  }
+}
+
+@keyframes gaia-orbit-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.gaia-empty-grid {
+  background-image:
+    linear-gradient(hsl(var(--primary) / 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--primary) / 0.08) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(circle at center, black, transparent 76%);
+  animation: gaia-grid-drift 22s linear infinite;
+}
+
+.gaia-workspace-shell {
+  background:
+    radial-gradient(circle at 18% 0%, hsl(var(--primary) / 0.08), transparent 28%),
+    radial-gradient(circle at 88% 10%, hsl(var(--foreground) / 0.035), transparent 30%),
+    linear-gradient(180deg, #111216 0%, #0d0e12 46%, #0b0c10 100%);
+}
+
+.gaia-workspace-grid {
+  background-image:
+    linear-gradient(hsl(var(--foreground) / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--foreground) / 0.025) 1px, transparent 1px),
+    radial-gradient(circle at 30% 20%, hsl(var(--foreground) / 0.04) 1px, transparent 1.4px);
+  background-size:
+    64px 64px,
+    64px 64px,
+    180px 180px;
+  mask-image: linear-gradient(to bottom, transparent, black 16%, black 84%, transparent);
+}
+
+.gaia-empty-scan {
+  animation: gaia-scan 6s ease-in-out infinite;
+}
+
+.gaia-orbit::before {
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--primary) / 0.12);
+  border-top-color: hsl(var(--primary) / 0.5);
+  animation: gaia-orbit-rotate 12s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gaia-empty-grid,
+  .gaia-workspace-grid,
+  .gaia-empty-scan,
+  .gaia-orbit::before {
+    animation: none;
+  }
 }

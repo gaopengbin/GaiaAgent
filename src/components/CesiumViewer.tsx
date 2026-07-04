@@ -10,7 +10,8 @@ declare const CesiumMcpBridge: { CesiumBridge: new (viewer: unknown) => unknown 
 
 type ViewerInstance = { destroy: () => void; isDestroyed: () => boolean }
 
-const DEFAULT_ION_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkODBmYWNiMi1kOTRiLTRjZTEtOTI0ZC00MTE2OWU0NzRkNzAiLCJpZCI6NDQ0NDAsImlhdCI6MTc2MzMxMTQxNX0.5qbneXFnJvmLIf1Tbcf-SPZCEk7pNKEN_ltxD3eeRWk'
+const DEFAULT_ION_TOKEN =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkODBmYWNiMi1kOTRiLTRjZTEtOTI0ZC00MTE2OWU0NzRkNzAiLCJpZCI6NDQ0NDAsImlhdCI6MTc2MzMxMTQxNX0.5qbneXFnJvmLIf1Tbcf-SPZCEk7pNKEN_ltxD3eeRWk'
 
 export function CesiumViewer({ onBridgeReady, ionToken }: CesiumViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -46,20 +47,31 @@ export function CesiumViewer({ onBridgeReady, ionToken }: CesiumViewerProps) {
       infoBox: false,
       selectionIndicator: false,
     }) as {
-      scene: { backgroundColor: unknown; globe: { baseColor: unknown } }
+      scene: {
+        backgroundColor: unknown
+        globe: { baseColor: unknown }
+        skyBox?: { show?: boolean } | undefined
+        skyAtmosphere?: { show?: boolean } | undefined
+        sun?: { show?: boolean } | undefined
+        moon?: { show?: boolean } | undefined
+      }
       imageryLayers: { add: (l: unknown) => void }
       camera: { flyTo: (opts: Record<string, unknown>) => void }
     }
 
-    viewer.scene.backgroundColor = C.Color.fromCssColorString('#0a0e17')
-    viewer.scene.globe.baseColor = C.Color.fromCssColorString('#0a0e17')
+    viewer.scene.backgroundColor = C.Color.fromCssColorString('#06080d')
+    viewer.scene.globe.baseColor = C.Color.fromCssColorString('#07101a')
+    if (viewer.scene.skyBox) viewer.scene.skyBox.show = false
+    if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = false
+    if (viewer.scene.sun) viewer.scene.sun.show = false
+    if (viewer.scene.moon) viewer.scene.moon.show = false
     viewer.imageryLayers.add(
       new C.ImageryLayer(
         new C.UrlTemplateImageryProvider({
           url: 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
           maximumLevel: 18,
-        })
-      )
+        }),
+      ),
     )
     viewer.camera.flyTo({
       destination: C.Cartesian3.fromDegrees(104, 35, 20_000_000),
@@ -78,11 +90,13 @@ export function CesiumViewer({ onBridgeReady, ionToken }: CesiumViewerProps) {
       console.error('[CesiumViewer] CesiumBridge init failed:', err)
     }
     return () => {
-      try { (viewer as unknown as ViewerInstance).destroy() } catch { /* ignore */ }
+      try {
+        ;(viewer as unknown as ViewerInstance).destroy()
+      } catch {
+        /* ignore */
+      }
     }
-  }, [onBridgeReady])
+  }, [onBridgeReady, ionToken])
 
-  return (
-    <div ref={containerRef} className="h-full w-full" />
-  )
+  return <div ref={containerRef} className="h-full w-full" />
 }

@@ -1,0 +1,75 @@
+{
+  "type": "FeatureCollection",
+  "name": "natural_resource_project_parcels",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "parcelId": "P-001",
+        "projectName": "城北生态停车场",
+        "owner": "示例建设单位",
+        "landUse": "public_facility",
+        "expectedRisk": "medium",
+        "note": "与生态保护红线和永久基本农田均存在疑似重叠"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.381, 39.922],
+            [116.386, 39.922],
+            [116.386, 39.927],
+            [116.381, 39.927],
+            [116.381, 39.922]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "parcelId": "P-002",
+        "projectName": "东侧物流配套",
+        "owner": "示例建设单位",
+        "landUse": "logistics",
+        "expectedRisk": "low",
+        "note": "仅与永久基本农田存在疑似边界穿越"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.392, 39.919],
+            [116.397, 39.919],
+            [116.397, 39.924],
+            [116.392, 39.924],
+            [116.392, 39.919]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "parcelId": "P-003",
+        "projectName": "西侧配套绿地",
+        "owner": "示例建设单位",
+        "landUse": "green_space",
+        "expectedRisk": "none",
+        "note": "不应出现在疑似冲突清单中"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [116.366, 39.914],
+            [116.37, 39.914],
+            [116.37, 39.918],
+            [116.366, 39.918],
+            [116.366, 39.914]
+          ]
+        ]
+      }
+    }
+  ]
+}

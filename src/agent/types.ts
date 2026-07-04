@@ -1,11 +1,3 @@
-import type { PlanStep } from '../types'
-
-export interface Plan {
-  goal: string
-  steps: PlanStep[]
-  reply?: string   // 纯对话回复（无需工具调用时）
-}
-
 export interface ToolSchema {
   name: string
   description: string
@@ -17,21 +9,23 @@ export interface ToolSchema {
   _meta?: { toolset?: string; [key: string]: unknown }
 }
 
-export interface LlmMessage {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-}
-
 export interface ModelSettings {
   provider: string
+  agentRuntime: 'native'
   ollamaHost: string
   ollamaModel: string
   openaiBaseUrl: string
   openaiApiKey: string
+  hasOpenaiApiKey: boolean
   openaiModel: string
+  anthropicBaseUrl: string
+  anthropicApiKey: string
+  hasAnthropicApiKey: boolean
+  anthropicModel: string
   cesiumIonToken: string
   tiandituToken: string
   proxyUrl: string
+  approvalMode: 'safe' | 'balanced' | 'auto'
 }
 
 // ---- Context Memory ----
@@ -46,16 +40,21 @@ export interface ConversationEntry {
 /** 场景中的图层 */
 export interface SceneLayer {
   id: string
-  type: string       // 'geojson' | '3dtiles' | 'imagery' | 'terrain'
+  type: string // 'geojson' | '3dtiles' | 'imagery' | 'terrain'
   source: string
+  name?: string
+  visible?: boolean
+  dataRefId?: string
 }
 
 /** 场景中的标注/标记（marker, label, billboard） */
 export interface SceneLabel {
-  id: string       // bridge 返回的 entityId
+  id: string // bridge 返回的 entityId
   text: string
   lat: number
   lon: number
+  height?: number
+  type?: string
 }
 
 /** 相机状态 */
@@ -67,7 +66,42 @@ export interface CameraState {
 
 /** 完整场景状态 */
 export interface SceneState {
+  revision: number
   camera: CameraState | null
   layers: SceneLayer[]
   labels: SceneLabel[]
+  activeObjectRef?: string | null
+  recentObjectRefs?: string[]
+  assets: Record<string, SpatialAsset>
+}
+
+export interface SpatialAsset {
+  ref: string
+  id: string
+  kind: 'layer' | 'entity' | 'asset'
+  name?: string
+  type: string
+  visible?: boolean
+  dataRefId?: string
+  position?: CameraState
+  lastCallId?: string
+  source?: 'agent' | 'user' | 'snapshot' | 'import' | 'mcp' | string
+  locked?: boolean
+  render?: Record<string, unknown>
+  uri?: string
+  crs?: string
+  geometryType?: string
+  featureCount?: number
+  bbox?: [number, number, number, number]
+  schema?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+}
+
+export interface ScenePatch {
+  revision: number
+  callId?: string
+  cameraChanged: boolean
+  added: SpatialAsset[]
+  updated: SpatialAsset[]
+  removed: string[]
 }

@@ -1,0 +1,50 @@
+[
+  {
+    "name": "direct camera move",
+    "goal": "飞到北京",
+    "rounds": [
+      {
+        "toolCalls": [
+          {
+            "id": "call-1",
+            "name": "flyTo",
+            "arguments": { "longitude": 116.39, "latitude": 39.9 }
+          }
+        ]
+      },
+      { "text": "已飞到北京。", "toolCalls": [] }
+    ],
+    "expectedTools": ["flyTo"],
+    "expectedAnswer": "已飞到北京。"
+  },
+  {
+    "name": "dependent geocode and marker",
+    "goal": "标记黄山",
+    "rounds": [
+      {
+        "toolCalls": [
+          { "id": "call-1", "name": "geocode", "arguments": { "address": "黄山" } }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "id": "call-2",
+            "name": "addMarker",
+            "arguments": { "longitude": 118.17, "latitude": 30.13, "text": "黄山" }
+          }
+        ]
+      },
+      { "text": "已标记黄山。", "toolCalls": [] }
+    ],
+    "expectedTools": ["geocode", "addMarker"],
+    "expectedAnswer": "已标记黄山。"
+  },
+  {
+    "name": "conversation without tools",
+    "goal": "你好",
+    "rounds": [{ "text": "你好，需要我操作地球场景吗？", "toolCalls": [] }],
+    "expectedTools": [],
+    "expectedAnswer": "你好，需要我操作地球场景吗？"
+  }
+]

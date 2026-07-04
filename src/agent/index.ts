@@ -1,27 +1,39 @@
-export { callLlm, streamLlm, cancelLlm } from './llm'
-export type { TokenUsage, LlmResult } from './llm'
-export { planFromGoal } from './planner'
-export { executePlan, normalizeToolResult } from './executor'
-export type { ToolCaller } from './executor'
-export { executeReAct } from './react'
-export type { ReactCallbacks } from './react'
-export { SYSTEM_PROMPT, SYSTEM_PROMPT_REACT, formatToolSchemas } from './prompts'
-export {
-  appendUserEntry,
-  appendAssistantEntry,
-  buildHistoryMessages,
-  createSceneState,
-  updateSceneState,
-  formatSceneContext,
-} from './history'
+export { AGENT_EVENT_VERSION, createAgentEvent, isAgentEvent, toAgentError } from './events'
 export type {
-  Plan,
+  AgentError,
+  AgentEvent,
+  AgentRunContinuation,
+  AgentRunStatus,
+  AgentTaskPlan,
+  AgentTaskPlanStep,
+  AgentTaskPlanStepStatus,
+  AgentToolCall,
+  AgentToolResult,
+  AgentUsage,
+  ToolRiskLevel,
+} from './events'
+export {
+  agentTimelineReducer,
+  initialAgentTimelineState,
+  normalizeAgentTimelineState,
+} from './event-reducer'
+export type {
+  AgentMessageView,
+  AgentReasoningView,
+  AgentRunView,
+  AgentTaskPlanStepView,
+  AgentTaskPlanView,
+  AgentTimelineState,
+  AgentToolView,
+} from './event-reducer'
+export { createSceneState } from './history'
+export type {
   ToolSchema,
-  LlmMessage,
   ModelSettings,
   ConversationEntry,
   SceneState,
   SceneLayer,
   SceneLabel,
   CameraState,
+  SpatialAsset,
 } from './types'
