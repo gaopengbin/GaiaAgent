@@ -62,6 +62,9 @@ export interface CameraState {
   lat: number
   lon: number
   height: number
+  heading?: number
+  pitch?: number
+  roll?: number
 }
 
 /** 完整场景状态 */

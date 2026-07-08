@@ -33,7 +33,7 @@ function asset(
 }
 
 describe('buildScenePanelAssetDisplayModel', () => {
-  it('folds marker implementation layers into their paired marker entity', () => {
+  it('folds marker entities into their paired map layer', () => {
     const markerEntity = asset({
       ref: 'entity:marker-1',
       id: 'marker-1',
@@ -53,10 +53,10 @@ describe('buildScenePanelAssetDisplayModel', () => {
 
     const displayModel = buildScenePanelAssetDisplayModel([markerEntity, markerLayer])
 
-    expect(displayModel.assets).toEqual([markerEntity])
-    expect(displayModel.foldedAssets).toEqual([markerLayer])
+    expect(displayModel.assets).toEqual([markerLayer])
+    expect(displayModel.foldedAssets).toEqual([markerEntity])
     expect(displayModel.foldedByParentRef).toEqual({
-      [markerEntity.ref]: [markerLayer],
+      [markerLayer.ref]: [markerEntity],
     })
   })
 
@@ -83,6 +83,73 @@ describe('buildScenePanelAssetDisplayModel', () => {
     expect(displayModel.assets).toEqual([markerEntity, independentLayer])
     expect(displayModel.foldedAssets).toEqual([])
     expect(displayModel.foldedByParentRef).toEqual({})
+  })
+
+  it('does not fold batch marker entities into the first marker layer by shared call id', () => {
+    const beijingEntity = asset({
+      ref: 'entity:beijing',
+      id: 'beijing',
+      kind: 'entity',
+      type: 'marker',
+      name: '北京',
+      lastCallId: 'tooluse-batch',
+    })
+    const guangzhouEntity = asset({
+      ref: 'entity:guangzhou',
+      id: 'guangzhou',
+      kind: 'entity',
+      type: 'marker',
+      name: '广州',
+      lastCallId: 'tooluse-batch',
+    })
+    const shanghaiEntity = asset({
+      ref: 'entity:shanghai',
+      id: 'shanghai',
+      kind: 'entity',
+      type: 'marker',
+      name: '上海',
+      lastCallId: 'tooluse-batch',
+    })
+    const beijingLayer = asset({
+      ref: 'layer:marker_beijing',
+      id: 'marker_beijing',
+      kind: 'layer',
+      type: 'marker',
+      name: '北京',
+      lastCallId: 'tooluse-batch',
+    })
+    const guangzhouLayer = asset({
+      ref: 'layer:marker_guangzhou',
+      id: 'marker_guangzhou',
+      kind: 'layer',
+      type: 'marker',
+      name: '广州',
+      lastCallId: 'tooluse-batch',
+    })
+    const shanghaiLayer = asset({
+      ref: 'layer:marker_shanghai',
+      id: 'marker_shanghai',
+      kind: 'layer',
+      type: 'marker',
+      name: '上海',
+      lastCallId: 'tooluse-batch',
+    })
+
+    const displayModel = buildScenePanelAssetDisplayModel([
+      beijingLayer,
+      guangzhouLayer,
+      shanghaiLayer,
+      beijingEntity,
+      guangzhouEntity,
+      shanghaiEntity,
+    ])
+
+    expect(displayModel.assets).toEqual([beijingLayer, guangzhouLayer, shanghaiLayer])
+    expect(displayModel.foldedByParentRef).toEqual({
+      [beijingLayer.ref]: [beijingEntity],
+      [guangzhouLayer.ref]: [guangzhouEntity],
+      [shanghaiLayer.ref]: [shanghaiEntity],
+    })
   })
 })
 

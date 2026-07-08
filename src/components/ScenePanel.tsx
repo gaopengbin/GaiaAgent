@@ -1,19 +1,20 @@
 import { useMemo, useState } from 'react'
 import {
+  ChevronDown,
+  ChevronRight,
   Copy,
   Crosshair,
   Download,
   Eye,
   EyeOff,
-  ExternalLink,
   Info,
   Layers,
   Lock,
   MapPin,
+  MoreHorizontal,
   PackageCheck,
   Pencil,
   RefreshCcw,
-  Ruler,
   Search,
   Trash2,
   Unlock,
@@ -31,6 +32,14 @@ import { cn } from '../lib/utils'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
 import type { SceneObjectTaskLink } from '../agent/scene-links'
 
 interface ScenePanelProps {
@@ -87,6 +96,9 @@ interface ScenePanelProps {
   onOpenTaskStep?: (link: SceneObjectTaskLink) => Promise<void> | void
 }
 
+type ScenePanelGroupMode = 'kind' | 'source'
+type ScenePanelSortMode = 'default' | 'name' | 'kind' | 'recent'
+
 function assetKindLabel(asset: SpatialAsset) {
   if (asset.kind === 'asset') return '数据资产'
   if (asset.kind === 'layer') return '图层'
@@ -114,10 +126,14 @@ function assetKindLabel(asset: SpatialAsset) {
 }
 
 function assetGroupLabel(asset: SpatialAsset) {
-  if (asset.kind === 'asset') return '数据资产'
+  if (asset.kind === 'asset') return '数据源'
   if (asset.kind === 'layer') return '图层'
-  const label = assetKindLabel(asset)
-  return label === '对象' ? '实体对象' : label
+  return '独立对象'
+}
+
+function scenePanelGroupLabel(asset: SpatialAsset, mode: ScenePanelGroupMode) {
+  if (mode === 'source') return sourceLabel(asset) || '未标记来源'
+  return assetGroupLabel(asset)
 }
 
 function assetIcon(asset: SpatialAsset) {
@@ -127,15 +143,6 @@ function assetIcon(asset: SpatialAsset) {
     return <Waypoints className="size-3.5" aria-hidden="true" />
   }
   return <MapPin className="size-3.5" aria-hidden="true" />
-}
-
-function assetSubtitle(asset: SpatialAsset) {
-  if (asset.position) {
-    return `${asset.position.lon.toFixed(5)}, ${asset.position.lat.toFixed(5)}`
-  }
-  if (asset.uri) return asset.uri
-  if (asset.dataRefId) return asset.dataRefId
-  return asset.id
 }
 
 function sourceLabel(asset: SpatialAsset) {
@@ -195,26 +202,38 @@ function normalizedAssetName(asset: SpatialAsset) {
   return (asset.name || asset.id).trim().toLowerCase()
 }
 
-function isMarkerLikeEntity(asset: SpatialAsset) {
-  return (
-    asset.kind === 'entity' &&
-    ['marker', 'point', 'billboard'].includes(asset.type.trim().toLowerCase())
-  )
-}
-
-function isMarkerImplementationLayer(asset: SpatialAsset) {
+function entityLayerPrefix(asset: SpatialAsset) {
   const type = asset.type.trim().toLowerCase()
-  return (
-    asset.kind === 'layer' &&
-    (type === 'marker' ||
-      asset.id.startsWith('marker_') ||
-      asset.ref.startsWith('layer:marker_') ||
-      asset.dataRefId?.startsWith('marker_'))
-  )
+  if (type === 'point') return 'marker'
+  if (
+    [
+      'marker',
+      'polyline',
+      'polygon',
+      'model',
+      'billboard',
+      'box',
+      'cylinder',
+      'ellipse',
+      'rectangle',
+      'wall',
+      'corridor',
+    ].includes(type)
+  ) {
+    return type
+  }
+  return undefined
 }
 
-function markerLayerBelongsToEntity(layer: SpatialAsset, entity: SpatialAsset) {
-  if (!isMarkerLikeEntity(entity)) return false
+function layerBelongsToEntity(layer: SpatialAsset, entity: SpatialAsset) {
+  if (layer.kind !== 'layer' || entity.kind !== 'entity') return false
+  const prefix = entityLayerPrefix(entity)
+  if (
+    prefix &&
+    (layer.id === `${prefix}_${entity.id}` || layer.dataRefId === `${prefix}_${entity.id}`)
+  ) {
+    return true
+  }
 
   const sameCall =
     layer.lastCallId !== undefined &&
@@ -226,23 +245,27 @@ function markerLayerBelongsToEntity(layer: SpatialAsset, entity: SpatialAsset) {
     entity.dataRefId !== undefined &&
     layer.dataRefId === entity.dataRefId
 
-  return sameDataRef || (sameCall && sameName) || (sameCall && layer.id.startsWith('marker_'))
+  if (sameDataRef || (sameCall && sameName)) return true
+  if (sameCall && entity.type.trim().toLowerCase() === 'label' && layer.id.startsWith('label_')) {
+    return true
+  }
+  return false
 }
 
 export function buildScenePanelAssetDisplayModel(
   assets: SpatialAsset[],
 ): ScenePanelAssetDisplayModel {
-  const entities = assets.filter(isMarkerLikeEntity)
+  const layers = assets.filter((asset) => asset.kind === 'layer')
   const foldedRefs = new Set<string>()
   const foldedByParentRef: Record<string, SpatialAsset[]> = {}
 
   for (const asset of assets) {
-    if (!isMarkerImplementationLayer(asset)) continue
-    const pairedEntity = entities.find((entity) => markerLayerBelongsToEntity(asset, entity))
-    if (pairedEntity) {
+    if (asset.kind !== 'entity') continue
+    const parentLayer = layers.find((layer) => layerBelongsToEntity(layer, asset))
+    if (parentLayer) {
       foldedRefs.add(asset.ref)
-      foldedByParentRef[pairedEntity.ref] = foldedByParentRef[pairedEntity.ref] ?? []
-      foldedByParentRef[pairedEntity.ref].push(asset)
+      foldedByParentRef[parentLayer.ref] = foldedByParentRef[parentLayer.ref] ?? []
+      foldedByParentRef[parentLayer.ref].push(asset)
     }
   }
 
@@ -285,13 +308,6 @@ function assetSchemaLabel(asset: SpatialAsset) {
   if (fields.length === 0) return undefined
   const suffix = Object.keys(asset.schema).length > fields.length ? ' …' : ''
   return `${fields.join(', ')}${suffix}`
-}
-
-function assetRenderLabel(asset: SpatialAsset) {
-  const renderTool = asset.metadata?.renderTool
-  const layerRef = asset.metadata?.layerRef
-  if (typeof renderTool !== 'string') return undefined
-  return typeof layerRef === 'string' ? `${renderTool} → ${layerRef}` : renderTool
 }
 
 function canCreatePointBuffer(asset: SpatialAsset) {
@@ -430,12 +446,6 @@ export interface ScenePanelBusinessOutcomeItem {
 }
 
 export type ScenePanelBusinessOutcomeFilter = 'all' | 'pending-review' | 'reviewed' | 'analysis'
-
-interface HighlightedTriageFeature {
-  assetRef: string
-  featureIndex?: number
-  label: string
-}
 
 function isScalarFilterValue(value: unknown): value is string | number | boolean {
   return ['string', 'number', 'boolean'].includes(typeof value)
@@ -751,19 +761,13 @@ export function ScenePanel({
   onRefresh,
   onSelect,
   onFocus,
-  onHighlightFeature,
-  onSetFeatureReviewStatus,
   onRename,
   onVisibilityChange,
   onLockChange,
   onDelete,
   onAddAssetToMap,
   onCreateBuffer,
-  onCreateNearest,
-  onCreateSpatialJoin,
-  onCreatePolygonOverlapScreen,
   onMeasureAsset,
-  onCreateAttributeFilter,
   onExportAssetGeoJson,
   onExportAssetCsv,
   onSetAllVisibility,
@@ -777,17 +781,13 @@ export function ScenePanel({
   onImportScene,
   onImportGeoJson,
   onImportCsv,
-  taskLinks = {},
-  onOpenTaskStep,
 }: ScenePanelProps) {
   const [query, setQuery] = useState('')
-  const [triageQuery, setTriageQuery] = useState('')
-  const [triageRiskFilter, setTriageRiskFilter] = useState<PolygonOverlapRiskFilter>('all')
-  const [triageReviewFilter, setTriageReviewFilter] = useState<PolygonOverlapReviewFilter>('all')
+  const [groupMode, setGroupMode] = useState<ScenePanelGroupMode>('kind')
+  const [sortMode, setSortMode] = useState<ScenePanelSortMode>('default')
   const [businessOutcomeFilter, setBusinessOutcomeFilter] =
     useState<ScenePanelBusinessOutcomeFilter>('all')
-  const [highlightedTriageFeature, setHighlightedTriageFeature] =
-    useState<HighlightedTriageFeature | null>(null)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const assets = useMemo(() => sortAssets(Object.values(scene.assets)), [scene.assets])
   const assetDisplayModel = useMemo(() => buildScenePanelAssetDisplayModel(assets), [assets])
   const deliverables = useMemo(
@@ -807,65 +807,52 @@ export function ScenePanel({
     [businessOutcomeFilter, businessOutcomeItems],
   )
   const displayAssets = assetDisplayModel.assets
+  const selectedAsset = scene.activeObjectRef ? scene.assets[scene.activeObjectRef] : undefined
+  const selectedChildren = selectedAsset
+    ? (assetDisplayModel.foldedByParentRef[selectedAsset.ref] ?? [])
+    : []
   const visibleAssets = displayAssets.filter((asset) => asset.visible !== false).length
   const layers = displayAssets.filter((asset) => asset.kind === 'layer').length
   const entities = displayAssets.length - layers
-  const filteredAssets = query
-    ? displayAssets.filter((asset) => matchesAsset(asset, query))
-    : displayAssets
+  const filteredAssets = useMemo(() => {
+    const matchedAssets = query
+      ? displayAssets.filter((asset) => matchesAsset(asset, query))
+      : [...displayAssets]
+    const recentRefs = scene.recentObjectRefs ?? []
+    return matchedAssets.sort((a, b) => {
+      if (sortMode === 'name') {
+        return (a.name || a.id).localeCompare(b.name || b.id, 'zh-CN')
+      }
+      if (sortMode === 'kind') {
+        return (
+          assetKindLabel(a).localeCompare(assetKindLabel(b), 'zh-CN') ||
+          (a.name || a.id).localeCompare(b.name || b.id, 'zh-CN')
+        )
+      }
+      if (sortMode === 'recent') {
+        const rank = (asset: SpatialAsset) => {
+          if (asset.ref === scene.activeObjectRef) return -2
+          const index = recentRefs.indexOf(asset.ref)
+          return index >= 0 ? index : 9999
+        }
+        return rank(a) - rank(b) || (a.name || a.id).localeCompare(b.name || b.id, 'zh-CN')
+      }
+      return 0
+    })
+  }, [displayAssets, query, scene.activeObjectRef, scene.recentObjectRefs, sortMode])
   const groups = filteredAssets.reduce<Record<string, SpatialAsset[]>>((acc, asset) => {
-    const label = assetGroupLabel(asset)
+    const label = scenePanelGroupLabel(asset, groupMode)
     acc[label] = acc[label] ?? []
     acc[label].push(asset)
     return acc
   }, {})
-
-  const highlightTriageFeature = (asset: SpatialAsset, item: PolygonOverlapTriageItem): void => {
-    if (!onHighlightFeature) {
-      void onFocus(asset)
-      return
-    }
-    void Promise.resolve(onHighlightFeature(asset, item.sourceFeatureIndex)).then(() => {
-      setHighlightedTriageFeature({
-        assetRef: asset.ref,
-        featureIndex: item.sourceFeatureIndex,
-        label: item.label,
-      })
+  const toggleGroup = (group: string) => {
+    setCollapsedGroups((current) => {
+      const next = new Set(current)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
+      return next
     })
-  }
-
-  const clearTriageHighlight = (asset: SpatialAsset): void => {
-    if (!onHighlightFeature) {
-      setHighlightedTriageFeature(null)
-      return
-    }
-    void Promise.resolve(onHighlightFeature(asset, undefined, { clear: true })).then(() => {
-      setHighlightedTriageFeature(null)
-    })
-  }
-
-  const setTriageReviewStatus = (
-    asset: SpatialAsset,
-    item: PolygonOverlapTriageItem,
-    reviewStatus: PolygonOverlapReviewStatus,
-  ): void => {
-    if (!onSetFeatureReviewStatus || item.sourceFeatureIndex === undefined) return
-    void onSetFeatureReviewStatus(asset, item.sourceFeatureIndex, reviewStatus)
-  }
-
-  const setTriageReviewStatusForItems = (
-    asset: SpatialAsset,
-    items: PolygonOverlapTriageItem[],
-    reviewStatus: PolygonOverlapReviewStatus,
-  ): void => {
-    if (!onSetFeatureReviewStatus) return
-    const targets = polygonOverlapReviewUpdateTargets(items, reviewStatus)
-    if (targets.length === 0) return
-    void Promise.all(
-      targets.map((item) =>
-        onSetFeatureReviewStatus(asset, item.sourceFeatureIndex as number, reviewStatus),
-      ),
-    )
   }
 
   return (
@@ -912,7 +899,80 @@ export function ScenePanel({
                 className="h-8 rounded-lg bg-muted/30 pl-8 text-xs"
               />
             </div>
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-2.5">
+            <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                  >
+                    分组：{groupMode === 'kind' ? '类型' : '来源'}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-36">
+                  <DropdownMenuLabel>图层树分组</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setGroupMode('kind')}>
+                    按类型分组
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setGroupMode('source')}>
+                    按来源分组
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                  >
+                    排序：
+                    {sortMode === 'default'
+                      ? '默认'
+                      : sortMode === 'name'
+                        ? '名称'
+                        : sortMode === 'kind'
+                          ? '类型'
+                          : '最近'}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-36">
+                  <DropdownMenuLabel>图层顺序</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setSortMode('default')}>
+                    默认顺序
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setSortMode('name')}>按名称</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setSortMode('kind')}>按类型</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setSortMode('recent')}>
+                    最近使用
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-7 px-2 text-[11px]"
+                onClick={() => setCollapsedGroups(new Set(Object.keys(groups)))}
+              >
+                全部折叠
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => setCollapsedGroups(new Set())}
+              >
+                展开
+              </Button>
+            </div>
+            <div className="hidden rounded-xl border border-primary/20 bg-primary/5 p-2.5">
               <div className="flex items-start gap-2">
                 <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
                   <PackageCheck className="size-3.5" aria-hidden="true" />
@@ -1023,7 +1083,7 @@ export function ScenePanel({
               </div>
             </div>
             {businessOutcomeItems.length > 0 && (
-              <div className="rounded-xl border border-border bg-card/70 p-2.5">
+              <div className="hidden rounded-xl border border-border bg-card/70 p-2.5">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-foreground">业务成果</p>
@@ -1116,10 +1176,9 @@ export function ScenePanel({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-6 rounded-full border-amber-500/25 bg-amber-500/5 px-2 text-[10px] text-amber-200"
+                              className="h-6 rounded-full border-amber-500/25 bg-amber-500/5 px-2 text-[10px] text-amber-700 dark:text-amber-200"
                               disabled={busy || !asset}
                               onClick={() => {
-                                setTriageReviewFilter('pending')
                                 if (asset) void onSelect(asset)
                               }}
                             >
@@ -1339,876 +1398,407 @@ export function ScenePanel({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
           {Object.entries(groups).map(([group, groupAssets]) => (
             <section key={group} className="space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <h3 className="text-[11px] font-semibold text-muted-foreground">{group}</h3>
-                <span className="text-[10px] text-muted-foreground">{groupAssets.length}</span>
-              </div>
-              {groupAssets.map((asset) => {
-                const visible = asset.visible !== false
-                const selected = scene.activeObjectRef === asset.ref
-                const recent = scene.recentObjectRefs?.includes(asset.ref) ?? false
-                const foldedChildren = assetDisplayModel.foldedByParentRef[asset.ref] ?? []
-                const taskLink = taskLinks[asset.ref]
-                const nearestTargets = nearestTargetCandidates(asset, assets)
-                const spatialJoin = spatialJoinCandidates(asset, assets)
-                const polygonOverlapTargets = polygonOverlapCandidates(asset, assets)
-                const attributeFilters = attributeFilterSuggestions(asset)
-                const analysisSummaryItems = scenePanelAnalysisSummaryItems(asset)
-                const polygonOverlapTriage = polygonOverlapTriageItems(asset)
-                const polygonOverlapReview = polygonOverlapReviewOverview(polygonOverlapTriage)
-                const filteredPolygonOverlapTriage = filterPolygonOverlapTriageItems(
-                  polygonOverlapTriage,
-                  {
-                    query: triageQuery,
-                    riskLevel: triageRiskFilter,
-                    reviewStatus: triageReviewFilter,
-                  },
-                )
-                const polygonOverlapRisk = polygonOverlapRiskOverview(asset)
-                const confirmablePolygonOverlapTriage = polygonOverlapReviewUpdateTargets(
-                  filteredPolygonOverlapTriage,
-                  'confirmed',
-                )
-                const excludablePolygonOverlapTriage = polygonOverlapReviewUpdateTargets(
-                  filteredPolygonOverlapTriage,
-                  'excluded',
-                )
-                return (
-                  <article
-                    key={asset.ref}
-                    role="button"
-                    tabIndex={0}
-                    aria-pressed={selected}
-                    onClick={() => void onSelect(asset)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        void onSelect(asset)
-                      }
-                    }}
-                    className={cn(
-                      'cursor-pointer rounded-lg border border-border bg-card/70 p-3 transition-colors hover:border-primary/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                      selected &&
-                        'border-primary/60 bg-primary/5 shadow-[0_0_0_1px_hsl(var(--primary)/0.22)]',
-                      !visible && 'opacity-60',
-                    )}
-                  >
-                    <div className="flex min-w-0 items-start gap-2">
-                      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                        {assetIcon(asset)}
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-1.5 py-1 text-left hover:bg-muted/60"
+                aria-expanded={!collapsedGroups.has(group)}
+                onClick={() => toggleGroup(group)}
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {collapsedGroups.has(group) ? (
+                    <ChevronRight className="size-3 text-muted-foreground" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  <span className="truncate text-[11px] font-semibold text-muted-foreground">
+                    {group}
+                  </span>
+                </span>
+                <span className="rounded-full border border-border px-1.5 py-0 text-[10px] text-muted-foreground">
+                  {groupAssets.length}
+                </span>
+              </button>
+              {!collapsedGroups.has(group) &&
+                groupAssets.map((asset) => {
+                  const visible = asset.visible !== false
+                  const selected = scene.activeObjectRef === asset.ref
+                  const recent = scene.recentObjectRefs?.includes(asset.ref) ?? false
+                  const foldedChildren = assetDisplayModel.foldedByParentRef[asset.ref] ?? []
+                  const polygonOverlapRisk = polygonOverlapRiskOverview(asset)
+                  return (
+                    <article
+                      key={asset.ref}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={selected}
+                      onClick={() => void onSelect(asset)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          void onSelect(asset)
+                        }
+                      }}
+                      className={cn(
+                        'group relative cursor-pointer rounded-md border border-transparent bg-transparent px-1.5 py-1 pr-8 transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                        selected &&
+                          'border-primary/45 bg-primary/10 shadow-[inset_2px_0_0_hsl(var(--primary))]',
+                        !visible && 'opacity-60',
+                      )}
+                    >
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="size-6 shrink-0"
+                          disabled={busy || asset.kind === 'asset'}
+                          title={visible ? '隐藏图层' : '显示图层'}
+                          aria-label={`${visible ? '隐藏' : '显示'} ${asset.name || asset.id}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void onVisibilityChange(asset, !visible)
+                          }}
+                        >
+                          {visible ? (
+                            <Eye className="size-3.5" aria-hidden="true" />
+                          ) : (
+                            <EyeOff className="size-3.5" aria-hidden="true" />
+                          )}
+                        </Button>
+                        <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+                          {foldedChildren.length > 0 ? (
+                            selected ? (
+                              <ChevronDown className="size-3.5" aria-hidden="true" />
+                            ) : (
+                              <ChevronRight className="size-3.5" aria-hidden="true" />
+                            )
+                          ) : (
+                            <span className="size-1 rounded-full bg-border" />
+                          )}
+                        </span>
+                        <span className="flex size-6 shrink-0 items-center justify-center rounded bg-primary/10 text-primary">
+                          {assetIcon(asset)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <p className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                              {asset.name || asset.id}
+                            </p>
+                            <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[9px]">
+                              {assetKindLabel(asset)}
+                            </Badge>
+                            {!visible && (
+                              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
+                                已隐藏
+                              </Badge>
+                            )}
+                            {selected && (
+                              <Badge variant="default" className="shrink-0 px-1.5 py-0 text-[9px]">
+                                当前
+                              </Badge>
+                            )}
+                            {!selected && recent && (
+                              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
+                                最近
+                              </Badge>
+                            )}
+                            {asset.locked && (
+                              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
+                                已锁定
+                              </Badge>
+                            )}
+                            {polygonOverlapRisk && (
+                              <Badge
+                                variant={
+                                  polygonOverlapRisk.dominantLevel === 'high'
+                                    ? 'destructive'
+                                    : polygonOverlapRisk.dominantLevel === 'medium'
+                                      ? 'default'
+                                      : 'secondary'
+                                }
+                                className="shrink-0 px-1.5 py-0 text-[9px]"
+                                title={`疑似冲突风险：${polygonOverlapRisk.label}`}
+                              >
+                                {polygonOverlapRisk.label}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="size-6 shrink-0"
+                          disabled={busy}
+                          title="定位到图层"
+                          aria-label={`定位到 ${asset.name || asset.id}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void onFocus(asset)
+                          }}
+                        >
+                          <Crosshair className="size-3.5" aria-hidden="true" />
+                        </Button>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-xs font-semibold text-foreground">
-                            {asset.name || asset.id}
-                          </p>
-                          <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[9px]">
-                            {assetKindLabel(asset)}
-                          </Badge>
-                          {!visible && (
-                            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
-                              已隐藏
-                            </Badge>
-                          )}
-                          {selected && (
-                            <Badge variant="default" className="shrink-0 px-1.5 py-0 text-[9px]">
-                              当前
-                            </Badge>
-                          )}
-                          {!selected && recent && (
-                            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
-                              最近
-                            </Badge>
-                          )}
-                          {asset.locked && (
-                            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
-                              已锁定
-                            </Badge>
-                          )}
-                          {polygonOverlapRisk && (
-                            <Badge
-                              variant={
-                                polygonOverlapRisk.dominantLevel === 'high'
-                                  ? 'destructive'
-                                  : polygonOverlapRisk.dominantLevel === 'medium'
-                                    ? 'default'
-                                    : 'secondary'
-                              }
-                              className="shrink-0 px-1.5 py-0 text-[9px]"
-                              title={`疑似冲突风险：${polygonOverlapRisk.label}`}
+                      {foldedChildren.length > 0 && (
+                        <div className="ml-[4.15rem] mt-1 space-y-0.5 border-l border-border/70 pl-2">
+                          {foldedChildren.map((child) => (
+                            <button
+                              key={child.ref}
+                              type="button"
+                              className="flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-[10px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                              title={`${child.ref} · ${child.type}`}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void onSelect(asset)
+                              }}
                             >
-                              {polygonOverlapRisk.label}
-                            </Badge>
-                          )}
+                              <span className="size-1 rounded-full bg-muted-foreground/50" />
+                              <span className="truncate">{child.name || child.id}</span>
+                              <span className="shrink-0 rounded border border-border px-1 py-0 text-[9px]">
+                                {child.type}
+                              </span>
+                            </button>
+                          ))}
                         </div>
-                        <p className="mt-1 truncate text-[10px] text-muted-foreground">
-                          {assetSubtitle(asset)}
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
-                          <span className="rounded-full border border-border px-1.5 py-0.5">
-                            来源：{sourceLabel(asset)}
-                          </span>
-                          {asset.lastCallId && (
-                            <span className="max-w-full truncate rounded-full border border-border px-1.5 py-0.5">
-                              调用：{asset.lastCallId}
-                            </span>
-                          )}
-                          {foldedChildren.length > 0 && (
-                            <span className="rounded-full border border-border px-1.5 py-0.5">
-                              已折叠 {foldedChildren.length} 个实现项
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {selected && (
-                      <div className="mt-3 rounded-lg border border-border/70 bg-background/55 p-2.5 text-[10px]">
-                        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
-                          <Info className="size-3.5 text-primary" aria-hidden="true" />
-                          对象详情
-                        </div>
-                        <dl className="space-y-1.5">
-                          <DetailRow label="引用" value={asset.ref} mono />
-                          <DetailRow label="ID" value={asset.id} mono />
-                          <DetailRow
-                            label="类型"
-                            value={`${assetKindLabel(asset)} / ${asset.type}`}
-                          />
-                          <DetailRow label="来源" value={sourceLabel(asset)} />
-                          <DetailRow label="状态" value={assetStatusLabel(asset)} />
-                          <DetailRow label="坐标" value={assetPositionLabel(asset)} mono />
-                          <DetailRow label="数据" value={asset.uri ?? asset.dataRefId} mono />
-                          <DetailRow label="坐标系" value={asset.crs} mono />
-                          <DetailRow label="几何" value={asset.geometryType} />
-                          <DetailRow
-                            label="要素数"
-                            value={
-                              asset.featureCount === undefined
-                                ? undefined
-                                : asset.featureCount.toLocaleString('zh-CN')
-                            }
-                          />
-                          <DetailRow label="范围" value={assetBboxLabel(asset)} mono />
-                          <DetailRow label="字段" value={assetSchemaLabel(asset)} mono />
-                          <DetailRow label="渲染" value={assetRenderLabel(asset)} mono />
-                          <DetailRow label="调用" value={asset.lastCallId} mono />
-                          {analysisSummaryItems.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">分析摘要</dt>
-                              <dd className="min-w-0 space-y-1">
-                                {analysisSummaryItems.map((item) => (
-                                  <div
-                                    key={item}
-                                    className="rounded border border-primary/20 bg-primary/5 px-1.5 py-1 text-foreground"
-                                  >
-                                    {item}
-                                  </div>
-                                ))}
-                              </dd>
-                            </div>
-                          )}
-                          {polygonOverlapTriage.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">冲突清单</dt>
-                              <dd className="min-w-0 space-y-1">
-                                <div className="space-y-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 p-1.5">
-                                  <div className="flex flex-wrap items-center gap-1">
-                                    {[
-                                      { value: 'all' as const, label: '全部' },
-                                      { value: 'high' as const, label: '高' },
-                                      { value: 'medium' as const, label: '中' },
-                                      { value: 'low' as const, label: '低' },
-                                    ].map((option) => (
-                                      <Button
-                                        key={option.value}
-                                        type="button"
-                                        variant={
-                                          triageRiskFilter === option.value ? 'default' : 'outline'
-                                        }
-                                        size="sm"
-                                        className="h-6 rounded-full px-2 text-[10px]"
-                                        disabled={busy}
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          setTriageRiskFilter(option.value)
-                                        }}
-                                      >
-                                        {option.label}
-                                      </Button>
-                                    ))}
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="ml-auto h-6 rounded-full px-2 text-[10px]"
-                                      disabled={busy}
-                                      title="导出完整冲突清单 CSV"
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        void onExportAssetCsv(asset)
-                                      }}
-                                    >
-                                      <Download className="size-3" aria-hidden="true" />
-                                      CSV
-                                    </Button>
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-1">
-                                    <span className="mr-1 rounded-full border border-border/70 bg-background/55 px-2 py-0.5 text-[10px] text-muted-foreground">
-                                      {polygonOverlapReview.label}
-                                    </span>
-                                    {[
-                                      { value: 'all' as const, label: '全部' },
-                                      { value: 'pending' as const, label: '待复核' },
-                                      { value: 'confirmed' as const, label: '已确认' },
-                                      { value: 'excluded' as const, label: '已排除' },
-                                    ].map((option) => (
-                                      <Button
-                                        key={option.value}
-                                        type="button"
-                                        variant={
-                                          triageReviewFilter === option.value
-                                            ? 'default'
-                                            : 'outline'
-                                        }
-                                        size="sm"
-                                        className="h-6 rounded-full px-2 text-[10px]"
-                                        disabled={busy}
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          setTriageReviewFilter(option.value)
-                                        }}
-                                      >
-                                        {option.label}
-                                      </Button>
-                                    ))}
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-1">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="h-6 rounded-full px-2 text-[10px]"
-                                      disabled={
-                                        busy ||
-                                        !onSetFeatureReviewStatus ||
-                                        confirmablePolygonOverlapTriage.length === 0
-                                      }
-                                      title={`将当前筛选命中的 ${confirmablePolygonOverlapTriage.length} 条标记为已确认`}
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        setTriageReviewStatusForItems(
-                                          asset,
-                                          filteredPolygonOverlapTriage,
-                                          'confirmed',
-                                        )
-                                      }}
-                                    >
-                                      批量确认当前筛选
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="h-6 rounded-full px-2 text-[10px]"
-                                      disabled={
-                                        busy ||
-                                        !onSetFeatureReviewStatus ||
-                                        excludablePolygonOverlapTriage.length === 0
-                                      }
-                                      title={`将当前筛选命中的 ${excludablePolygonOverlapTriage.length} 条标记为已排除`}
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        setTriageReviewStatusForItems(
-                                          asset,
-                                          filteredPolygonOverlapTriage,
-                                          'excluded',
-                                        )
-                                      }}
-                                    >
-                                      批量排除当前筛选
-                                    </Button>
-                                  </div>
-                                  <div className="relative">
-                                    <Search
-                                      className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
-                                      aria-hidden="true"
-                                    />
-                                    <Input
-                                      value={triageQuery}
-                                      onChange={(event) => setTriageQuery(event.target.value)}
-                                      onClick={(event) => event.stopPropagation()}
-                                      placeholder="搜索地块、风险或目标索引..."
-                                      className="h-7 rounded-lg bg-background/70 pl-7 text-[10px]"
-                                    />
-                                  </div>
-                                  <p className="text-[10px] text-muted-foreground">
-                                    当前显示 {filteredPolygonOverlapTriage.length} /{' '}
-                                    {polygonOverlapTriage.length} 条，完整属性可导出 CSV 交付。
-                                  </p>
-                                  {highlightedTriageFeature?.assetRef === asset.ref && (
-                                    <div className="flex min-w-0 items-center gap-1 rounded-lg border border-amber-400/30 bg-amber-400/10 px-1.5 py-1 text-[10px]">
-                                      <Crosshair
-                                        className="size-3 shrink-0 text-amber-300"
-                                        aria-hidden="true"
-                                      />
-                                      <span className="min-w-0 flex-1 truncate text-foreground">
-                                        当前高亮：{highlightedTriageFeature.label}
-                                        {highlightedTriageFeature.featureIndex !== undefined
-                                          ? `（源要素索引 ${highlightedTriageFeature.featureIndex}）`
-                                          : ''}
-                                      </span>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-5 shrink-0 rounded-full px-2 text-[10px]"
-                                        disabled={busy}
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          clearTriageHighlight(asset)
-                                        }}
-                                      >
-                                        清除
-                                      </Button>
-                                    </div>
-                                  )}
-                                </div>
-                                {filteredPolygonOverlapTriage.slice(0, 5).map((item, index) => {
-                                  const highlighted =
-                                    highlightedTriageFeature?.assetRef === asset.ref &&
-                                    highlightedTriageFeature.featureIndex ===
-                                      item.sourceFeatureIndex
-                                  return (
-                                    <div
-                                      key={`${item.label}:${index}`}
-                                      className={cn(
-                                        'rounded border border-amber-500/25 bg-amber-500/5 px-1.5 py-1 text-foreground',
-                                        highlighted &&
-                                          'border-amber-300/60 bg-amber-300/15 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]',
-                                      )}
-                                    >
-                                      <div className="flex min-w-0 items-center gap-1.5">
-                                        <Badge
-                                          variant={
-                                            item.riskLevel === 'high'
-                                              ? 'destructive'
-                                              : item.riskLevel === 'medium'
-                                                ? 'default'
-                                                : 'secondary'
-                                          }
-                                          className="shrink-0 px-1.5 py-0 text-[9px]"
-                                        >
-                                          {item.riskLabel}风险
-                                        </Badge>
-                                        <span className="min-w-0 truncate font-medium">
-                                          {item.label}
-                                        </span>
-                                        {highlighted && (
-                                          <Badge
-                                            variant="outline"
-                                            className="shrink-0 border-amber-300/50 px-1.5 py-0 text-[9px] text-amber-200"
-                                          >
-                                            高亮中
-                                          </Badge>
-                                        )}
-                                        <Badge
-                                          variant={
-                                            item.reviewStatus === 'confirmed'
-                                              ? 'default'
-                                              : item.reviewStatus === 'excluded'
-                                                ? 'secondary'
-                                                : 'outline'
-                                          }
-                                          className="shrink-0 px-1.5 py-0 text-[9px]"
-                                        >
-                                          {item.reviewStatusLabel}
-                                        </Badge>
-                                        <Button
-                                          type="button"
-                                          variant={highlighted ? 'outline' : 'ghost'}
-                                          size="icon-xs"
-                                          className="ml-auto size-6 shrink-0"
-                                          disabled={busy}
-                                          title="在地图上高亮这条疑似冲突"
-                                          aria-label={`定位 ${item.label}`}
-                                          onClick={(event) => {
-                                            event.stopPropagation()
-                                            highlightTriageFeature(asset, item)
-                                          }}
-                                        >
-                                          <Crosshair className="size-3" aria-hidden="true" />
-                                        </Button>
-                                      </div>
-                                      <div className="mt-1 text-muted-foreground">
-                                        {item.sourceFeatureIndex !== undefined
-                                          ? `源要素索引 ${item.sourceFeatureIndex} · `
-                                          : ''}
-                                        命中 {item.candidateCount} 个边界
-                                        {item.targetIndices.length > 0
-                                          ? ` · 目标索引 ${item.targetIndices.join(', ')}`
-                                          : ''}
-                                        {item.areaSquareMeters !== undefined
-                                          ? ` · 面积 ${item.areaSquareMeters.toLocaleString(
-                                              'zh-CN',
-                                              {
-                                                maximumFractionDigits: 2,
-                                              },
-                                            )}㎡`
-                                          : ''}
-                                      </div>
-                                      <div className="mt-1.5 flex flex-wrap gap-1">
-                                        {[
-                                          { value: 'pending' as const, label: '待复核' },
-                                          { value: 'confirmed' as const, label: '确认' },
-                                          { value: 'excluded' as const, label: '排除' },
-                                        ].map((option) => (
-                                          <Button
-                                            key={option.value}
-                                            type="button"
-                                            variant={
-                                              item.reviewStatus === option.value
-                                                ? 'default'
-                                                : 'outline'
-                                            }
-                                            size="sm"
-                                            className="h-5 rounded-full px-2 text-[10px]"
-                                            disabled={
-                                              busy ||
-                                              !onSetFeatureReviewStatus ||
-                                              item.sourceFeatureIndex === undefined
-                                            }
-                                            title={`标记为${option.label}`}
-                                            onClick={(event) => {
-                                              event.stopPropagation()
-                                              setTriageReviewStatus(asset, item, option.value)
-                                            }}
-                                          >
-                                            {option.label}
-                                          </Button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )
-                                })}
-                                {filteredPolygonOverlapTriage.length === 0 && (
-                                  <p className="rounded border border-border bg-muted/20 px-1.5 py-1 text-[10px] text-muted-foreground">
-                                    当前筛选条件下没有冲突项。
-                                  </p>
-                                )}
-                                {filteredPolygonOverlapTriage.length > 5 && (
-                                  <p className="text-[10px] text-muted-foreground">
-                                    另有 {filteredPolygonOverlapTriage.length - 5}{' '}
-                                    个疑似冲突地块，可继续筛选或导出 CSV / GeoJSON 查看完整清单。
-                                  </p>
-                                )}
-                              </dd>
-                            </div>
-                          )}
-                          {attributeFilters.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">属性筛选</dt>
-                              <dd className="min-w-0 space-y-1">
-                                {attributeFilters.map((filter) => (
-                                  <Button
-                                    key={`${filter.field}:${String(filter.value)}`}
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-auto max-w-full justify-start rounded-lg px-2 py-1 text-left text-[10px]"
-                                    disabled={busy}
-                                    title={`筛选 ${filter.field} = ${String(filter.value)}`}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      void onCreateAttributeFilter(
-                                        asset,
-                                        filter.field,
-                                        filter.value,
-                                      )
-                                    }}
-                                  >
-                                    <Search className="size-3 shrink-0" aria-hidden="true" />
-                                    <span className="min-w-0 truncate">
-                                      {filter.field} = {String(filter.value)}（{filter.count}）
-                                    </span>
-                                  </Button>
-                                ))}
-                              </dd>
-                            </div>
-                          )}
-                          {canCreatePointBuffer(asset) && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">缓冲区</dt>
-                              <dd className="flex min-w-0 flex-wrap gap-1">
-                                {[100, 500, 1000].map((distance) => (
-                                  <Button
-                                    key={distance}
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-6 rounded-full px-2 text-[10px]"
-                                    disabled={busy}
-                                    title={`生成 ${distance >= 1000 ? `${distance / 1000}km` : `${distance}m`} 缓冲区`}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      void onCreateBuffer(asset, distance)
-                                    }}
-                                  >
-                                    {distance >= 1000 ? `${distance / 1000}km` : `${distance}m`}
-                                  </Button>
-                                ))}
-                              </dd>
-                            </div>
-                          )}
-                          {nearestTargets.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">最近邻</dt>
-                              <dd className="min-w-0 space-y-1">
-                                {nearestTargets.slice(0, 5).map((target) => (
-                                  <Button
-                                    key={target.ref}
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-auto max-w-full justify-start rounded-lg px-2 py-1 text-left text-[10px]"
-                                    disabled={busy}
-                                    title={`查找 ${asset.name ?? asset.id} 到 ${target.name ?? target.id} 的最近邻`}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      void onCreateNearest(asset, target)
-                                    }}
-                                  >
-                                    <Waypoints className="size-3 shrink-0" aria-hidden="true" />
-                                    <span className="min-w-0 truncate">
-                                      → {target.name ?? target.id}
-                                    </span>
-                                  </Button>
-                                ))}
-                                {nearestTargets.length > 5 && (
-                                  <p className="text-[10px] text-muted-foreground">
-                                    另有 {nearestTargets.length - 5} 个点资产，可通过 AI
-                                    指定目标资产分析。
-                                  </p>
-                                )}
-                              </dd>
-                            </div>
-                          )}
-                          {isMeasurableGeoJsonAsset(asset) && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">量测</dt>
-                              <dd className="min-w-0">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-6 rounded-full px-2 text-[10px]"
-                                  disabled={busy}
-                                  title={`量测 ${asset.name ?? asset.id} 的长度、面积和周长`}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    void onMeasureAsset(asset)
-                                  }}
+                      )}
+                      <div className="absolute right-1 top-1">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              className="size-6 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
+                              disabled={busy}
+                              aria-label={`${asset.name || asset.id} 更多操作`}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <MoreHorizontal className="size-3.5" aria-hidden="true" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            className="w-44"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <DropdownMenuLabel className="truncate">
+                              {asset.name || asset.id}
+                            </DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={() => void onFocus(asset)}>
+                              定位到对象
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => void onRename(asset)}>
+                              重命名
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onSelect={() => void navigator.clipboard?.writeText(asset.ref)}
+                            >
+                              复制引用
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onSelect={() => void onLockChange(asset, !asset.locked)}
+                            >
+                              {asset.locked ? '解锁' : '锁定'}
+                            </DropdownMenuItem>
+                            {asset.kind !== 'asset' && (
+                              <DropdownMenuItem
+                                onSelect={() => void onVisibilityChange(asset, !visible)}
+                              >
+                                {visible ? '隐藏' : '显示'}
+                              </DropdownMenuItem>
+                            )}
+                            {asset.kind === 'asset' && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  disabled={asset.metadata?.renderTool !== 'addGeoJsonLayer'}
+                                  onSelect={() => void onAddAssetToMap(asset)}
                                 >
-                                  <Ruler className="size-3" aria-hidden="true" />
-                                  计算长度/面积
-                                </Button>
-                              </dd>
-                            </div>
-                          )}
-                          {spatialJoin.candidates.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">
-                                {spatialJoin.mode === 'point-to-polygons' ? '区域统计' : '点统计'}
-                              </dt>
-                              <dd className="min-w-0 space-y-1">
-                                {spatialJoin.candidates.slice(0, 5).map((target) => {
-                                  const pointAsset =
-                                    spatialJoin.mode === 'point-to-polygons' ? asset : target
-                                  const polygonAsset =
-                                    spatialJoin.mode === 'point-to-polygons' ? target : asset
-                                  return (
-                                    <Button
-                                      key={target.ref}
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="h-auto max-w-full justify-start rounded-lg px-2 py-1 text-left text-[10px]"
-                                      disabled={busy}
-                                      title={`统计 ${polygonAsset.name ?? polygonAsset.id} 内的 ${pointAsset.name ?? pointAsset.id}`}
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        void onCreateSpatialJoin(pointAsset, polygonAsset)
-                                      }}
-                                    >
-                                      <MapPin className="size-3 shrink-0" aria-hidden="true" />
-                                      <span className="min-w-0 truncate">
-                                        {spatialJoin.mode === 'point-to-polygons'
-                                          ? `按 ${target.name ?? target.id} 统计`
-                                          : `统计 ${target.name ?? target.id}`}
-                                      </span>
-                                    </Button>
-                                  )
-                                })}
-                                {spatialJoin.candidates.length > 5 && (
-                                  <p className="text-[10px] text-muted-foreground">
-                                    另有 {spatialJoin.candidates.length - 5} 个可统计资产，可通过 AI
-                                    指定目标资产分析。
-                                  </p>
-                                )}
-                              </dd>
-                            </div>
-                          )}
-                          {polygonOverlapTargets.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">合规初筛</dt>
-                              <dd className="min-w-0 space-y-1">
-                                {polygonOverlapTargets.slice(0, 5).map((target) => (
-                                  <Button
-                                    key={target.ref}
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-auto max-w-full justify-start rounded-lg px-2 py-1 text-left text-[10px]"
-                                    disabled={busy}
-                                    title={`筛查 ${asset.name ?? asset.id} 与 ${target.name ?? target.id} 的疑似重叠/压占`}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      void onCreatePolygonOverlapScreen(asset, target)
-                                    }}
-                                  >
-                                    <Layers className="size-3 shrink-0" aria-hidden="true" />
-                                    <span className="min-w-0 truncate">
-                                      对比 {target.name ?? target.id}
-                                    </span>
-                                  </Button>
-                                ))}
-                                {polygonOverlapTargets.length > 5 && (
-                                  <p className="text-[10px] text-muted-foreground">
-                                    另有 {polygonOverlapTargets.length - 5} 个面资产，可通过 AI
-                                    指定目标边界筛查。
-                                  </p>
-                                )}
-                              </dd>
-                            </div>
-                          )}
-                          {taskLink && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">任务步骤</dt>
-                              <dd className="min-w-0">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-auto max-w-full justify-start gap-1.5 rounded-lg px-2 py-1 text-left text-[10px]"
-                                  title={`查看任务步骤：${taskLink.stepTitle}`}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    void onOpenTaskStep?.(taskLink)
-                                  }}
+                                  添加到地图
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={!canCreatePointBuffer(asset)}
+                                  onSelect={() => void onCreateBuffer(asset)}
                                 >
-                                  <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
-                                  <span className="min-w-0">
-                                    <span className="block truncate">
-                                      {taskLink.stepIndex + 1}. {taskLink.stepTitle}
-                                    </span>
-                                    <span className="block truncate text-muted-foreground">
-                                      {taskLink.runGoal}
-                                    </span>
-                                  </span>
-                                </Button>
-                              </dd>
-                            </div>
-                          )}
-                          {foldedChildren.length > 0 && (
-                            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                              <dt className="text-muted-foreground">实现项</dt>
-                              <dd className="min-w-0 space-y-1">
-                                {foldedChildren.map((child) => (
-                                  <div
-                                    key={child.ref}
-                                    className="truncate rounded border border-border/70 px-1.5 py-1 font-mono text-foreground/80"
-                                    title={`${child.ref} · ${child.type}`}
-                                  >
-                                    {child.ref} · {child.type}
-                                  </div>
-                                ))}
-                              </dd>
-                            </div>
-                          )}
-                        </dl>
+                                  生成 500m 缓冲区
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={!isMeasurableGeoJsonAsset(asset)}
+                                  onSelect={() => void onMeasureAsset(asset)}
+                                >
+                                  量测长度/面积
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={!asset.metadata?.renderData}
+                                  onSelect={() => void onExportAssetGeoJson(asset)}
+                                >
+                                  导出 GeoJSON
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={!asset.metadata?.renderData}
+                                  onSelect={() => void onExportAssetCsv(asset)}
+                                >
+                                  导出 CSV
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              disabled={asset.locked}
+                              className="text-destructive focus:text-destructive"
+                              onSelect={() => void onDelete(asset)}
+                            >
+                              删除
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
-                    )}
-                    <div className="mt-3 flex items-center justify-end gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={busy}
-                        title="复制对象引用"
-                        aria-label={`复制 ${asset.name || asset.id} 的对象引用`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void navigator.clipboard?.writeText(asset.ref)
-                        }}
-                      >
-                        <Copy aria-hidden="true" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={busy}
-                        title="重命名对象"
-                        aria-label={`重命名 ${asset.name || asset.id}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void onRename(asset)
-                        }}
-                      >
-                        <Pencil aria-hidden="true" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={busy}
-                        title="定位到对象"
-                        aria-label={`定位到 ${asset.name || asset.id}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void onFocus(asset)
-                        }}
-                      >
-                        <Crosshair aria-hidden="true" />
-                      </Button>
-                      {asset.kind === 'asset' && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={busy || asset.metadata?.renderTool !== 'addGeoJsonLayer'}
-                          title="添加到地图"
-                          aria-label={`添加 ${asset.name || asset.id} 到地图`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void onAddAssetToMap(asset)
-                          }}
-                        >
-                          <Layers aria-hidden="true" />
-                        </Button>
-                      )}
-                      {asset.kind === 'asset' && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={busy || !canCreatePointBuffer(asset)}
-                          title="生成 500m 缓冲区"
-                          aria-label={`为 ${asset.name || asset.id} 生成 500m 缓冲区`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void onCreateBuffer(asset)
-                          }}
-                        >
-                          <Waypoints aria-hidden="true" />
-                        </Button>
-                      )}
-                      {asset.kind === 'asset' && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={busy || !isMeasurableGeoJsonAsset(asset)}
-                          title="量测长度/面积"
-                          aria-label={`量测 ${asset.name || asset.id} 的长度和面积`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void onMeasureAsset(asset)
-                          }}
-                        >
-                          <Ruler aria-hidden="true" />
-                        </Button>
-                      )}
-                      {asset.kind === 'asset' && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={busy || !asset.metadata?.renderData}
-                          title="导出 GeoJSON"
-                          aria-label={`导出 ${asset.name || asset.id} 的 GeoJSON`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void onExportAssetGeoJson(asset)
-                          }}
-                        >
-                          <Download aria-hidden="true" />
-                        </Button>
-                      )}
-                      {asset.kind === 'asset' && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          disabled={busy || !asset.metadata?.renderData}
-                          title="导出 CSV"
-                          aria-label={`导出 ${asset.name || asset.id} 的 CSV`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void onExportAssetCsv(asset)
-                          }}
-                        >
-                          <Download aria-hidden="true" />
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={busy || asset.kind === 'asset'}
-                        title={visible ? '隐藏对象' : '显示对象'}
-                        aria-label={`${visible ? '隐藏' : '显示'} ${asset.name || asset.id}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void onVisibilityChange(asset, !visible)
-                        }}
-                      >
-                        {visible ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={busy}
-                        title={asset.locked ? '解锁对象' : '锁定对象'}
-                        aria-label={`${asset.locked ? '解锁' : '锁定'} ${asset.name || asset.id}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void onLockChange(asset, !asset.locked)
-                        }}
-                      >
-                        {asset.locked ? <Lock aria-hidden="true" /> : <Unlock aria-hidden="true" />}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        disabled={busy || asset.locked}
-                        title={asset.locked ? '对象已锁定，先解锁再删除' : '删除对象'}
-                        aria-label={`删除 ${asset.name || asset.id}`}
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void onDelete(asset)
-                        }}
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </Button>
-                    </div>
-                  </article>
-                )
-              })}
+                    </article>
+                  )
+                })}
             </section>
           ))}
+          {selectedAsset && (
+            <section className="sticky bottom-0 z-10 rounded-xl border border-border bg-card/95 p-3 shadow-[0_-10px_30px_rgb(0_0_0/0.12)] backdrop-blur">
+              <div className="mb-2 flex min-w-0 items-start gap-2">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  {assetIcon(selectedAsset)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+                      {selectedAsset.name || selectedAsset.id}
+                    </h3>
+                    <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[9px]">
+                      {assetKindLabel(selectedAsset)}
+                    </Badge>
+                    {selectedAsset.visible === false && (
+                      <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[9px]">
+                        已隐藏
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+                    {selectedAsset.ref}
+                  </p>
+                </div>
+              </div>
+              <div className="mb-2 flex flex-wrap gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={busy}
+                  onClick={() => void onFocus(selectedAsset)}
+                >
+                  <Crosshair className="size-3" aria-hidden="true" />
+                  定位
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={busy || selectedAsset.kind === 'asset'}
+                  onClick={() =>
+                    void onVisibilityChange(selectedAsset, selectedAsset.visible === false)
+                  }
+                >
+                  {selectedAsset.visible === false ? (
+                    <Eye className="size-3" aria-hidden="true" />
+                  ) : (
+                    <EyeOff className="size-3" aria-hidden="true" />
+                  )}
+                  {selectedAsset.visible === false ? '显示' : '隐藏'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={busy}
+                  onClick={() => void onRename(selectedAsset)}
+                >
+                  <Pencil className="size-3" aria-hidden="true" />
+                  重命名
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={busy}
+                  onClick={() => void onLockChange(selectedAsset, !selectedAsset.locked)}
+                >
+                  {selectedAsset.locked ? (
+                    <Unlock className="size-3" aria-hidden="true" />
+                  ) : (
+                    <Lock className="size-3" aria-hidden="true" />
+                  )}
+                  {selectedAsset.locked ? '解锁' : '锁定'}
+                </Button>
+                {selectedAsset.kind === 'asset' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    disabled={busy || selectedAsset.metadata?.renderTool !== 'addGeoJsonLayer'}
+                    onClick={() => void onAddAssetToMap(selectedAsset)}
+                  >
+                    <Layers className="size-3" aria-hidden="true" />
+                    加到地图
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={busy}
+                  onClick={() => void navigator.clipboard?.writeText(selectedAsset.ref)}
+                >
+                  <Copy className="size-3" aria-hidden="true" />
+                  复制引用
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
+                  disabled={busy || selectedAsset.locked}
+                  onClick={() => void onDelete(selectedAsset)}
+                >
+                  <Trash2 className="size-3" aria-hidden="true" />
+                  删除
+                </Button>
+              </div>
+              <div className="space-y-1 text-[10px]">
+                <DetailRow label="ID" value={selectedAsset.id} mono />
+                <DetailRow
+                  label="类型"
+                  value={`${assetKindLabel(selectedAsset)} / ${selectedAsset.type}`}
+                />
+                <DetailRow label="来源" value={sourceLabel(selectedAsset)} />
+                <DetailRow label="状态" value={assetStatusLabel(selectedAsset)} />
+                <DetailRow label="坐标" value={assetPositionLabel(selectedAsset)} mono />
+                <DetailRow label="范围" value={assetBboxLabel(selectedAsset)} mono />
+                <DetailRow label="数据" value={selectedAsset.uri ?? selectedAsset.dataRefId} mono />
+                <DetailRow label="字段" value={assetSchemaLabel(selectedAsset)} mono />
+                {selectedChildren.length > 0 && (
+                  <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
+                    <span className="text-muted-foreground">实现项</span>
+                    <span className="min-w-0 truncate text-foreground/90">
+                      {selectedChildren.map((child) => `${child.type}:${child.id}`).join(' / ')}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
         </div>
       )}
     </div>

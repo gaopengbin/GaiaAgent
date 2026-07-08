@@ -20,6 +20,7 @@ import { useBridgeWS } from './hooks/useBridgeWS'
 import { Button } from './components/ui/button'
 import type { SpatialAsset } from './agent'
 import { buildSceneObjectTaskLinks, type SceneObjectTaskLink } from './agent/scene-links'
+import { useTheme } from './context/ThemeProvider'
 
 const SettingsDialog = lazy(() =>
   import('./components/SettingsDialog').then((module) => ({ default: module.SettingsDialog })),
@@ -35,6 +36,7 @@ const DeliverablesImportDialog = lazy(() =>
 
 export function App() {
   const agent = useTauriAgent()
+  const { resolvedTheme } = useTheme()
   const updateAgentModelSettings = agent.updateModelSettings
   const refreshSceneState = agent.refreshSceneState
   const focusSceneObject = agent.focusSceneObject
@@ -110,7 +112,7 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (bridge) replayCurrentSceneToBridge()
+    if (bridge) void replayCurrentSceneToBridge()
   }, [bridge, replayCurrentSceneToBridge])
 
   const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -185,8 +187,12 @@ export function App() {
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,hsl(var(--primary)/0.12),transparent_28%),radial-gradient(circle_at_82%_78%,hsl(var(--primary)/0.09),transparent_34%)]" />
           <div className="gaia-workspace-grid absolute inset-0" />
         </div>
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-card/95 shadow-[0_10px_40px_rgb(0_0_0/0.25)]">
-          <CesiumViewer onBridgeReady={handleBridgeReady} ionToken={modelSettings.cesiumIonToken} />
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/80 bg-card/95 shadow-[0_12px_42px_rgb(15_23_42/0.12)] dark:border-white/10 dark:shadow-[0_10px_40px_rgb(0_0_0/0.25)]">
+          <CesiumViewer
+            onBridgeReady={handleBridgeReady}
+            ionToken={modelSettings.cesiumIonToken}
+            theme={resolvedTheme}
+          />
         </div>
         <Button
           type="button"
@@ -199,7 +205,7 @@ export function App() {
           <span className="h-16 w-1 rounded-full bg-border/70 transition-colors group-hover:bg-primary/70 group-focus-visible:bg-primary" />
         </Button>
         <div
-          className="relative flex shrink-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-card/95 shadow-[0_10px_40px_rgb(0_0_0/0.25)]"
+          className="relative flex shrink-0 flex-col overflow-hidden rounded-xl border border-border/80 bg-card/95 shadow-[0_12px_42px_rgb(15_23_42/0.12)] dark:border-white/10 dark:shadow-[0_10px_40px_rgb(0_0_0/0.25)]"
           style={{ width: chatWidth }}
         >
           <div className="flex shrink-0 items-center gap-1 border-b border-border bg-background px-2 py-1.5">
@@ -260,12 +266,14 @@ export function App() {
                 onSwitchSession={agent.switchSession}
                 onDeleteSession={agent.deleteSession}
                 onClearContext={agent.clearCurrentContext}
+                onCompactContext={agent.compactCurrentContext}
                 onApprovalModeChange={handleApprovalModeChange}
                 onOpenSceneObject={handleOpenSceneObject}
                 onExportDeliverablesPackage={agent.exportCurrentDeliverablesPackage}
                 onRetryTaskStep={agent.retryTaskStep}
                 onSkipTaskStep={agent.skipTaskStep}
                 onReplanTaskStep={agent.replanTaskStep}
+                onApplySandboxPatch={agent.applySandboxPatchAndStartMcp}
                 highlightedTaskStep={highlightedTaskStep}
               />
             ) : sidePanel === 'scene' ? (

@@ -6,6 +6,7 @@ import {
   businessWorkflowCompletionSummary,
   businessWorkflowRunProgress,
   businessWorkflowRunContextFromGoal,
+  extractFollowupSuggestions,
 } from './ChatPanel'
 import { buildBusinessWorkflowSuggestions } from '../agent/business-workflows'
 
@@ -57,6 +58,29 @@ describe('buildSceneArtifactChipModel', () => {
       detail: '尚未同步',
       available: false,
     })
+  })
+})
+
+describe('extractFollowupSuggestions', () => {
+  it('extracts bullet follow-up suggestions after a hint anchor', () => {
+    expect(
+      extractFollowupSuggestions(`现在地图应该能看到结果。
+
+有什么想进一步做的，比如：
+
+- 按温度高低做颜色分级渲染？
+- 加载省级行政边界底图？
+- 点击城市查看详细天气预报？`),
+    ).toEqual(['按温度高低做颜色分级渲染', '加载省级行政边界底图', '点击城市查看详细天气预报'])
+  })
+
+  it('does not turn ordinary markdown lists into quick actions', () => {
+    expect(
+      extractFollowupSuggestions(`已完成：
+
+- 34 个橙色标注点
+- 34 条文字标注`),
+    ).toEqual([])
   })
 })
 

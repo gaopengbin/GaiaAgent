@@ -122,20 +122,75 @@ export type ToolOutputProps = ComponentProps<'div'> & {
   errorText: ToolPart['errorText']
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function imageUrlFromToolOutput(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.startsWith('data:image/') || trimmed.startsWith('blob:')) return trimmed
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return imageUrlFromToolOutput(JSON.parse(trimmed))
+      } catch {
+        return undefined
+      }
+    }
+    return undefined
+  }
+  if (!isRecord(value)) return undefined
+
+  const dataUrl = value.dataUrl ?? value.url ?? value.image
+  if (typeof dataUrl === 'string') {
+    if (dataUrl.startsWith('data:image/') || dataUrl.startsWith('blob:')) return dataUrl
+    const mediaType =
+      typeof value.mediaType === 'string'
+        ? value.mediaType
+        : typeof value.mimeType === 'string'
+          ? value.mimeType
+          : undefined
+    if (mediaType?.startsWith('image/') && /^[A-Za-z0-9+/=\r\n]+$/.test(dataUrl)) {
+      return `data:${mediaType};base64,${dataUrl.replace(/\s+/g, '')}`
+    }
+  }
+
+  return (
+    imageUrlFromToolOutput(value.data) ??
+    imageUrlFromToolOutput(value.result) ??
+    imageUrlFromToolOutput(value.output)
+  )
+}
+
+function ToolImageOutput({ url }: { url: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="block overflow-hidden rounded-md border border-border bg-background/50 p-2"
+      title="点击查看原图"
+    >
+      <img src={url} alt="工具返回图片" className="max-h-80 max-w-full rounded object-contain" />
+    </a>
+  )
+}
+
 export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutputProps) => {
   if (!(output || errorText)) {
     return null
   }
 
-  let Output = <div>{output as ReactNode}</div>
+  const imageUrl = imageUrlFromToolOutput(output)
+  let Output = imageUrl ? <ToolImageOutput url={imageUrl} /> : <div>{output as ReactNode}</div>
 
-  if (typeof output === 'object' && !isValidElement(output)) {
+  if (!imageUrl && typeof output === 'object' && !isValidElement(output)) {
     Output = (
       <pre className="overflow-auto rounded-md bg-muted/50 p-3 text-xs">
         {JSON.stringify(output, null, 2)}
       </pre>
     )
-  } else if (typeof output === 'string') {
+  } else if (!imageUrl && typeof output === 'string') {
     Output = <pre className="overflow-auto rounded-md bg-muted/50 p-3 text-xs">{output}</pre>
   }
 

@@ -27,6 +27,21 @@ export type {
   AgentToolView,
 } from './event-reducer'
 export { createSceneState } from './history'
+export {
+  applyAiSandboxPatch,
+  discardAiSandboxPatch,
+  listAiSandboxCapabilities,
+  prepareAiSandboxPatch,
+  readAiSandboxTarget,
+} from './ai-sandbox'
+export type {
+  AiSandboxApplyResult,
+  AiSandboxCapability,
+  AiSandboxPatch,
+  AiSandboxPatchStatus,
+  AiSandboxTarget,
+  AiSandboxValidation,
+} from './ai-sandbox'
 export type {
   ToolSchema,
   ModelSettings,

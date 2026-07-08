@@ -1,4 +1,5 @@
 pub mod agent;
+mod ai_sandbox;
 mod mcp;
 mod telemetry;
 
@@ -1972,6 +1973,51 @@ fn scene_tool_schemas() -> Vec<ToolSchema> {
     ]
 }
 
+fn config_tool_schemas() -> Vec<ToolSchema> {
+    vec![
+        ToolSchema {
+            name: "config_get".into(),
+            description: "Read one Host-controlled GaiaAgent configuration target. Use this before preparing a configuration patch so existing settings are preserved.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "enum": ["mcp-servers"],
+                        "description": "The controlled configuration target to read. Currently only mcp-servers is available to the AI agent."
+                    }
+                },
+                "required": ["target"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSchema {
+            name: "config_prepare_patch".into(),
+            description: "Prepare a sandboxed GaiaAgent configuration patch. This does not apply the change. For adding an MCP server, call config_get first, merge the new server into the existing servers object, then pass the full proposed mcp-servers JSON here. The user must review and apply the resulting patch.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "enum": ["mcp-servers"],
+                        "description": "The controlled configuration target to patch. Currently only mcp-servers is available to the AI agent."
+                    },
+                    "proposed": {
+                        "type": "object",
+                        "description": "The complete proposed target JSON. For mcp-servers this must be { servers: { id: config } } and should preserve existing servers from config_get."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Short human-readable reason shown in the review UI."
+                    }
+                },
+                "required": ["target", "proposed", "reason"],
+                "additionalProperties": false
+            }),
+        },
+    ]
+}
+
 fn is_scene_tool(name: &str) -> bool {
     matches!(
         name,
@@ -1998,6 +2044,58 @@ fn is_scene_tool(name: &str) -> bool {
             | "scene_set_locked"
             | "scene_clear_agent_objects"
     )
+}
+
+fn is_config_tool(name: &str) -> bool {
+    matches!(name, "config_get" | "config_prepare_patch")
+}
+
+fn sandbox_target_from_params(params: &Value) -> Result<ai_sandbox::AiSandboxTarget, String> {
+    let target = params
+        .get("target")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "config tool requires target".to_string())?;
+    match target {
+        "mcp-servers" => Ok(ai_sandbox::AiSandboxTarget::McpServers),
+        _ => Err("Only the mcp-servers configuration target is available to the AI agent".into()),
+    }
+}
+
+fn execute_config_tool(name: String, params: Value) -> Result<Value, String> {
+    match name.as_str() {
+        "config_get" => {
+            let target = sandbox_target_from_params(&params)?;
+            let value = ai_sandbox::ai_sandbox_read_target(target)?;
+            Ok(json!({
+                "ok": true,
+                "target": target,
+                "config": value,
+            }))
+        }
+        "config_prepare_patch" => {
+            let target = sandbox_target_from_params(&params)?;
+            let proposed = params
+                .get("proposed")
+                .cloned()
+                .ok_or_else(|| "config_prepare_patch requires proposed".to_string())?;
+            let reason = params
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let patch = ai_sandbox::ai_sandbox_prepare_patch(ai_sandbox::AiSandboxPatchRequest {
+                target,
+                proposed,
+                reason,
+            })?;
+            Ok(json!({
+                "ok": true,
+                "sandboxPatch": true,
+                "message": "配置补丁已生成，等待用户确认应用。",
+                "patch": patch,
+            }))
+        }
+        _ => Err(format!("unsupported config tool '{name}'")),
+    }
 }
 
 // ── Active streaming requests (for cancellation) ─────────────────────────────
@@ -2685,6 +2783,47 @@ struct AgentSessionStatus {
     compacted: bool,
     compaction_kind: Option<String>,
     summary: Option<String>,
+}
+
+fn agent_session_status_from_turns(
+    session_id: String,
+    turns: &[agent::ProviderTurn],
+) -> AgentSessionStatus {
+    let estimated_bytes = serde_json::to_vec(turns)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    let summary = turns.iter().find_map(|turn| {
+        if let agent::ProviderTurn::Message { message } = turn {
+            if message.role == agent::MessageRole::System
+                && (message.content.starts_with("Semantic conversation memory:")
+                    || message
+                        .content
+                        .starts_with("Compacted conversation memory:")
+                    || message.content.starts_with("Recent-context compaction:"))
+            {
+                return Some(message.content.clone());
+            }
+        }
+        None
+    });
+    let compaction_kind = summary.as_ref().map(|summary| {
+        if summary.starts_with("Semantic conversation memory:") {
+            "semantic"
+        } else if summary.starts_with("Compacted conversation memory:") {
+            "structured"
+        } else {
+            "recent"
+        }
+        .to_string()
+    });
+    AgentSessionStatus {
+        session_id,
+        turn_count: turns.len(),
+        estimated_bytes,
+        compacted: summary.is_some(),
+        compaction_kind,
+        summary,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -6112,19 +6251,6 @@ fn should_enable_model_planning_for_goal(goal: &str) -> bool {
     }
 
     let lower = trimmed.to_ascii_lowercase();
-    let action_or_gis_keywords = [
-        "飞到", "定位", "添加", "标注", "绘制", "路线", "图层", "底图", "地图", "地球", "场景",
-        "显示", "隐藏", "删除", "清空", "导入", "加载", "搜索", "查询", "分析", "生成", "规划",
-        "测量", "缓冲", "叠加", "geojson", "kml", "czml", "3d", "cesium", "mcp", "tool", "map",
-        "layer", "marker", "route", "fly", "draw", "load", "delete", "import",
-    ];
-    if action_or_gis_keywords
-        .iter()
-        .any(|keyword| trimmed.contains(keyword) || lower.contains(keyword))
-    {
-        return true;
-    }
-
     let normalized = trimmed
         .trim_matches(|ch: char| {
             ch.is_whitespace()
@@ -6134,6 +6260,7 @@ fn should_enable_model_planning_for_goal(goal: &str) -> bool {
                 )
         })
         .to_ascii_lowercase();
+
     let exact_lightweight = [
         "你好",
         "您好",
@@ -6181,7 +6308,71 @@ fn should_enable_model_planning_for_goal(goal: &str) -> bool {
         return false;
     }
 
-    true
+    let informational_markers = [
+        "有什么",
+        "有哪些",
+        "哪些",
+        "什么适合",
+        "适合的",
+        "推荐",
+        "列举",
+        "列表",
+        "介绍",
+        "说明",
+        "是什么",
+        "有什么区别",
+        "优劣",
+        "优势",
+        "不足",
+        "为什么",
+        "怎么",
+        "如何",
+        "what",
+        "which",
+        "recommend",
+    ];
+    let explicit_action_markers = [
+        "帮我",
+        "请帮",
+        "给我",
+        "直接",
+        "使用 config_get",
+        "config_prepare_patch",
+        "添加一个",
+        "新增一个",
+        "配置一个",
+        "接入一个",
+        "启动",
+        "安装",
+        "id:",
+        "command:",
+        "args:",
+        "env:",
+    ];
+    if informational_markers
+        .iter()
+        .any(|marker| trimmed.contains(marker) || lower.contains(marker))
+        && !explicit_action_markers
+            .iter()
+            .any(|marker| trimmed.contains(marker) || lower.contains(marker))
+    {
+        return false;
+    }
+
+    let action_or_gis_keywords = [
+        "飞到", "定位", "添加", "标注", "绘制", "路线", "图层", "底图", "地图", "地球", "场景",
+        "显示", "隐藏", "删除", "清空", "导入", "加载", "搜索", "查询", "分析", "生成", "规划",
+        "测量", "缓冲", "叠加", "geojson", "kml", "czml", "3d", "cesium", "mcp", "tool", "map",
+        "layer", "marker", "route", "fly", "draw", "load", "delete", "import",
+    ];
+    if action_or_gis_keywords
+        .iter()
+        .any(|keyword| trimmed.contains(keyword) || lower.contains(keyword))
+    {
+        return true;
+    }
+
+    false
 }
 
 fn should_enable_model_planning_for_request(
@@ -6537,6 +6728,56 @@ async fn compact_native_history_semantic(
     insert_compacted_summary(turns, &compacted, summary)
 }
 
+fn split_history_for_manual_compaction(
+    turns: Vec<agent::ProviderTurn>,
+    settings: &ModelSettings,
+) -> (Vec<agent::ProviderTurn>, Vec<agent::ProviderTurn>) {
+    let (max_turns, max_bytes) = context_limits(settings);
+    let (recent, compacted) = split_history_for_compaction_with_limits(
+        turns.clone(),
+        max_turns.min(12),
+        max_bytes.min(128 * 1024),
+    );
+    if !compacted.is_empty() {
+        return (recent, compacted);
+    }
+    if turns.len() <= 6 {
+        return (turns, Vec::new());
+    }
+    let keep_count = 6;
+    let split_at = turns.len().saturating_sub(keep_count);
+    let mut recent = turns;
+    let compacted = recent.drain(..split_at).collect();
+    (recent, compacted)
+}
+
+async fn compact_native_history_manual(
+    settings: &ModelSettings,
+    turns: Vec<agent::ProviderTurn>,
+) -> Vec<agent::ProviderTurn> {
+    let mode = settings.context_compaction_mode.to_ascii_lowercase();
+    let (turns, compacted) = split_history_for_manual_compaction(turns, settings);
+    if compacted.is_empty() {
+        return turns;
+    }
+    let structured_summary = summarize_compacted_turns(&compacted);
+    let summary = match mode.as_str() {
+        "semantic" => match summarize_history_with_model(settings, &structured_summary).await {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Manual semantic history compaction failed, using structured fallback: {error:?}");
+                structured_summary
+            }
+        },
+        "recent" => format!(
+            "Recent-context compaction: {} older provider turns were omitted by a manual compaction. Use only the recent full turns that follow as the source of truth.",
+            compacted.len()
+        ),
+        _ => structured_summary,
+    };
+    insert_compacted_summary(turns, &compacted, summary)
+}
+
 struct NativeToolExecutor<'a> {
     runtime_port: u16,
     proxy_url: String,
@@ -6561,6 +6802,10 @@ impl agent::ToolExecutor for NativeToolExecutor<'_> {
             let scene_action = call.name.clone();
             let scene_arguments = call.arguments.clone();
             let scene_call_id = call.id.clone();
+            if is_config_tool(&scene_action) {
+                let value = execute_config_tool(scene_action, scene_arguments)?;
+                return serde_json::to_string(&value).map_err(|error| error.to_string());
+            }
             if is_scene_tool(&scene_action) {
                 let value = execute_scene_tool(
                     scene_states,
@@ -6615,12 +6860,15 @@ impl agent::ApprovalGate for NativeApprovalGate {
             "scene_get_state"
                 | "scene_list_objects"
                 | "scene_describe_object"
+                | "config_get"
                 | "asset_list"
                 | "asset_describe"
                 | "asset_summarize"
                 | "asset_export"
         ) {
             agent::ToolRiskLevel::Read
+        } else if name.starts_with("config_") {
+            agent::ToolRiskLevel::Filesystem
         } else if name.starts_with("scene_") {
             agent::ToolRiskLevel::SceneWrite
         } else if ["shell", "command", "process", "exec", "spawn"]
@@ -6774,6 +7022,7 @@ async fn agent_run_native(
 ) -> Result<agent::RuntimeOutcome, agent::ProviderError> {
     let settings = state.model_settings.lock().unwrap().clone();
     let mut runtime_tools = scene_tool_schemas();
+    runtime_tools.extend(config_tool_schemas());
     runtime_tools.extend(
         list_tools_inner(state.runtime_port)
             .await
@@ -6952,6 +7201,37 @@ fn agent_clear_session(session_id: String, state: State<'_, AppState>) -> Result
 }
 
 #[tauri::command]
+fn agent_clear_context(session_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut sessions = state.native_sessions.lock().unwrap();
+        sessions.remove(&session_id);
+    }
+    delete_native_session_from_disk(&session_id)
+}
+
+#[tauri::command]
+async fn agent_compact_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<AgentSessionStatus, String> {
+    let settings = state.model_settings.lock().unwrap().clone();
+    let current_turns = {
+        let sessions = state.native_sessions.lock().unwrap();
+        sessions.get(&session_id).cloned().unwrap_or_default()
+    };
+    let compacted_turns = compact_native_history_manual(&settings, current_turns).await;
+    {
+        let mut sessions = state.native_sessions.lock().unwrap();
+        sessions.insert(session_id.clone(), compacted_turns.clone());
+    }
+    save_native_session_to_disk(&session_id, &compacted_turns)?;
+    Ok(agent_session_status_from_turns(
+        session_id,
+        &compacted_turns,
+    ))
+}
+
+#[tauri::command]
 fn agent_task_plan_save_snapshot(
     session_id: String,
     snapshot: Value,
@@ -7110,41 +7390,7 @@ fn agent_session_status(
 ) -> Result<AgentSessionStatus, String> {
     let sessions = state.native_sessions.lock().unwrap();
     let turns = sessions.get(&session_id).cloned().unwrap_or_default();
-    let estimated_bytes = serde_json::to_vec(&turns)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    let summary = turns.iter().find_map(|turn| {
-        if let agent::ProviderTurn::Message { message } = turn {
-            if message.role == agent::MessageRole::System
-                && (message.content.starts_with("Semantic conversation memory:")
-                    || message
-                        .content
-                        .starts_with("Compacted conversation memory:")
-                    || message.content.starts_with("Recent-context compaction:"))
-            {
-                return Some(message.content.clone());
-            }
-        }
-        None
-    });
-    let compaction_kind = summary.as_ref().map(|summary| {
-        if summary.starts_with("Semantic conversation memory:") {
-            "semantic"
-        } else if summary.starts_with("Compacted conversation memory:") {
-            "structured"
-        } else {
-            "recent"
-        }
-        .to_string()
-    });
-    Ok(AgentSessionStatus {
-        session_id,
-        turn_count: turns.len(),
-        estimated_bytes,
-        compacted: summary.is_some(),
-        compaction_kind,
-        summary,
-    })
+    Ok(agent_session_status_from_turns(session_id, &turns))
 }
 
 fn cc_switch_db_path() -> PathBuf {
@@ -7338,6 +7584,8 @@ pub fn run() {
             ai_cancel,
             agent_run_native,
             agent_clear_session,
+            agent_clear_context,
+            agent_compact_session,
             agent_task_plan_save_snapshot,
             agent_task_plan_load_snapshot,
             agent_task_plan_latest_step_tool_call,
@@ -7366,6 +7614,12 @@ pub fn run() {
             mcp::mcp_server_statuses,
             mcp::mcp_load_config,
             mcp::mcp_save_config,
+            ai_sandbox::ai_sandbox_read_target,
+            ai_sandbox::ai_sandbox_capabilities,
+            ai_sandbox::ai_sandbox_prepare_patch,
+            ai_sandbox::ai_sandbox_apply_patch,
+            ai_sandbox::ai_sandbox_get_patch,
+            ai_sandbox::ai_sandbox_discard_patch,
             telemetry::trace_record_event,
             telemetry::trace_list_sessions,
             telemetry::trace_get_events,
@@ -7455,7 +7709,30 @@ mod tests {
             agent::ProviderTurn::Message { message }
                 if message.role == agent::MessageRole::System
                     && message.content.contains("Compacted conversation memory")
-                    && message.content.contains("important old intent")
+            && message.content.contains("important old intent")
+        ));
+    }
+
+    #[test]
+    fn manual_compaction_keeps_recent_turns_and_compacts_old_turns() {
+        let turns = (0..10)
+            .map(|index| agent::ProviderTurn::Message {
+                message: agent::ProviderMessage {
+                    role: agent::MessageRole::User,
+                    content: format!("turn {index}"),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let (recent, compacted) =
+            split_history_for_manual_compaction(turns, &ModelSettings::default());
+
+        assert_eq!(recent.len(), 6);
+        assert_eq!(compacted.len(), 4);
+        assert!(matches!(
+            &recent[0],
+            agent::ProviderTurn::Message { message }
+                if message.content == "turn 4"
         ));
     }
 
@@ -7489,12 +7766,28 @@ mod tests {
     }
 
     #[test]
+    fn informational_mcp_questions_skip_model_planning() {
+        for goal in [
+            "有什么适合的mcp可以添加的",
+            "有哪些适合 GIS 的 MCP 推荐？",
+            "介绍一下 WMS/WMTS 图层 MCP",
+        ] {
+            assert!(
+                !should_enable_model_planning_for_goal(goal),
+                "expected no task plan for informational question: {goal}"
+            );
+        }
+    }
+
+    #[test]
     fn gis_action_goals_keep_model_planning_enabled() {
         for goal in [
             "飞到故宫",
             "在故宫添加一个红色标注",
             "加载这个 GeoJSON 图层",
             "规划一条从故宫到长城的路线",
+            "帮我添加 amap-maps MCP",
+            "请使用 config_get 和 config_prepare_patch 添加 MCP",
         ] {
             assert!(
                 should_enable_model_planning_for_goal(goal),

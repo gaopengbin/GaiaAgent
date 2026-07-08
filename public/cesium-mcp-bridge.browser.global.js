@@ -713,6 +713,14 @@ var CesiumMcpBridge = (function (exports) {
     const target = Cesium2.Cartesian3.fromDegrees(longitude, latitude, 0);
     const range = _heightToRange(height, pitch);
     return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallback);
+        resolve();
+      };
+      const fallback = setTimeout(done, (duration + 1) * 1e3);
       viewer.camera.flyToBoundingSphere(new Cesium2.BoundingSphere(target, 0), {
         duration,
         offset: new Cesium2.HeadingPitchRange(
@@ -720,13 +728,25 @@ var CesiumMcpBridge = (function (exports) {
           Cesium2.Math.toRadians(pitch),
           range
         ),
-        complete: resolve
+        complete: done,
+        cancel: done
       });
     });
   }
   function setView(viewer, params) {
-    const { longitude, latitude, height = 5e4, heading = 0, pitch = -45 } = params;
+    const { longitude, latitude, height = 5e4, heading = 0, pitch = -45, roll = 0, absolute = false } = params;
     validateCoordinate(longitude, latitude, height);
+    if (absolute) {
+      viewer.camera.setView({
+        destination: Cesium2.Cartesian3.fromDegrees(longitude, latitude, height),
+        orientation: {
+          heading: Cesium2.Math.toRadians(heading),
+          pitch: Cesium2.Math.toRadians(pitch),
+          roll: Cesium2.Math.toRadians(roll)
+        }
+      });
+      return;
+    }
     const target = Cesium2.Cartesian3.fromDegrees(longitude, latitude, 0);
     const range = _heightToRange(height, pitch);
     viewer.camera.lookAt(
@@ -754,10 +774,19 @@ var CesiumMcpBridge = (function (exports) {
     const { bbox, duration = 1.5 } = params;
     const [west, south, east, north] = bbox;
     return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallback);
+        resolve();
+      };
+      const fallback = setTimeout(done, (duration + 1) * 1e3);
       viewer.camera.flyTo({
         destination: Cesium2.Rectangle.fromDegrees(west, south, east, north),
         duration,
-        complete: resolve
+        complete: done,
+        cancel: done
       });
     });
   }
@@ -2165,20 +2194,25 @@ var CesiumMcpBridge = (function (exports) {
   function batchAddEntities(viewer, entities, helpers) {
     const entityIds = [];
     const errors = [];
-    for (let i = 0; i < entities.length; i++) {
-      const def = entities[i];
-      const { type, ...params } = def;
-      try {
-        const fn = helpers[type === "marker" ? "addMarker" : type === "polyline" ? "addPolyline" : type === "polygon" ? "addPolygon" : type === "model" ? "addModel" : type === "billboard" ? "addBillboard" : type === "box" ? "addBox" : type === "cylinder" ? "addCylinder" : type === "ellipse" ? "addEllipse" : type === "rectangle" ? "addRectangle" : type === "wall" ? "addWall" : type === "corridor" ? "addCorridor" : null];
-        if (!fn) {
-          errors.push(`[${i}] Unknown type: ${type}`);
-          continue;
+    viewer.entities.suspendEvents();
+    try {
+      for (let i = 0; i < entities.length; i++) {
+        const def = entities[i];
+        const { type, ...params } = def;
+        try {
+          const fn = helpers[type === "marker" ? "addMarker" : type === "polyline" ? "addPolyline" : type === "polygon" ? "addPolygon" : type === "model" ? "addModel" : type === "billboard" ? "addBillboard" : type === "box" ? "addBox" : type === "cylinder" ? "addCylinder" : type === "ellipse" ? "addEllipse" : type === "rectangle" ? "addRectangle" : type === "wall" ? "addWall" : type === "corridor" ? "addCorridor" : null];
+          if (!fn) {
+            errors.push(`[${i}] Unknown type: ${type}`);
+            continue;
+          }
+          const entity = fn(params);
+          entityIds.push(entity.id);
+        } catch (err) {
+          errors.push(`[${i}] ${err instanceof Error ? err.message : String(err)}`);
         }
-        const entity = fn(params);
-        entityIds.push(entity.id);
-      } catch (err) {
-        errors.push(`[${i}] ${err instanceof Error ? err.message : String(err)}`);
       }
+    } finally {
+      viewer.entities.resumeEvents();
     }
     return { entityIds, errors };
   }
@@ -2234,6 +2268,7 @@ var CesiumMcpBridge = (function (exports) {
       entityId: entity.id,
       name: name ? String(name) : void 0,
       type,
+      visible: entity.show !== false,
       position
     });
   }
@@ -2531,6 +2566,7 @@ var CesiumMcpBridge = (function (exports) {
       entityId: entity.id,
       name: entity.name ?? void 0,
       type,
+      visible: entity.show !== false,
       position,
       properties,
       graphicProperties,
@@ -3830,9 +3866,8 @@ var CesiumMcpBridge = (function (exports) {
       return count;
     }
     addMarker(params) {
-      const layerId = params.layerId ?? (params.id ? `marker_${params.id}` : `marker_${Date.now()}`);
-      this.removeLayer(layerId);
       const entity = addMarker(this._viewer, params);
+      const layerId = `marker_${entity.id}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3846,9 +3881,8 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addPolyline(params) {
-      const layerId = params.layerId ?? (params.id ? `polyline_${params.id}` : `polyline_${Date.now()}`);
-      this.removeLayer(layerId);
       const entity = addPolyline(this._viewer, params);
+      const layerId = `polyline_${entity.id}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3862,9 +3896,8 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addPolygon(params) {
-      const layerId = params.layerId ?? (params.id ? `polygon_${params.id}` : `polygon_${Date.now()}`);
-      this.removeLayer(layerId);
       const entity = addPolygon(this._viewer, params);
+      const layerId = `polygon_${entity.id}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3878,9 +3911,8 @@ var CesiumMcpBridge = (function (exports) {
       return entity;
     }
     addModel(params) {
-      const layerId = params.layerId ?? (params.id ? `model_${params.id}` : `model_${Date.now()}`);
-      this.removeLayer(layerId);
       const entity = addModel(this._viewer, params);
+      const layerId = `model_${entity.id}`;
       const info = {
         id: layerId,
         name: params.label ?? layerId,
@@ -3934,8 +3966,8 @@ var CesiumMcpBridge = (function (exports) {
       setCameraOptions(this._viewer, params);
     }
     // ==================== Entity Types (融合官方 Entity Server) ====================
-    _registerEntityLayer(entity, type, name, color, layerIdHint) {
-      const layerId = layerIdHint ?? (entity.id ? `${type}_${entity.id}` : `${type}_${Date.now()}`);
+    _registerEntityLayer(entity, type, name, color) {
+      const layerId = `${type}_${entity.id}`;
       const info = {
         id: layerId,
         name: name ?? entity.name ?? layerId,
@@ -4073,6 +4105,7 @@ var CesiumMcpBridge = (function (exports) {
           return {
             ...entity,
             name: entity.name ?? details.name,
+            visible: entity.visible ?? details.visible,
             position: entity.position ?? details.position,
             graphicProperties: details.graphicProperties,
             properties: details.properties,

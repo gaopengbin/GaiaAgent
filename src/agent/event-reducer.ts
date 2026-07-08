@@ -368,6 +368,16 @@ function updateRun(
   }
 }
 
+function stopRunStreaming(run: AgentRunView): AgentRunView {
+  return {
+    ...run,
+    messages: run.messages.map((message) =>
+      message.streaming ? { ...message, streaming: false } : message,
+    ),
+    reasoning: run.reasoning ? { ...run.reasoning, status: 'done' } : undefined,
+  }
+}
+
 function updateTool(
   run: AgentRunView,
   callId: string,
@@ -982,12 +992,11 @@ export function agentTimelineReducer(
                 },
               ]
           return withToolSyncedPlan({
-            ...run,
+            ...stopRunStreaming(run),
             status: 'completed',
             completedAt: event.timestamp,
             summary: event.summary,
             messages,
-            reasoning: run.reasoning ? { ...run.reasoning, status: 'done' } : undefined,
           })
         },
         event.id,
@@ -998,7 +1007,7 @@ export function agentTimelineReducer(
         event.runId,
         (run) =>
           withToolSyncedPlan({
-            ...run,
+            ...stopRunStreaming(run),
             status: 'cancelled',
             completedAt: event.timestamp,
             summary: event.reason,
@@ -1011,7 +1020,7 @@ export function agentTimelineReducer(
         event.runId,
         (run) =>
           withToolSyncedPlan({
-            ...run,
+            ...stopRunStreaming(run),
             status: 'failed',
             completedAt: event.timestamp,
             error: event.error,

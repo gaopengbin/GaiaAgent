@@ -1,7 +1,7 @@
 {
   "name": "gaia-agent",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "packageManager": "npm@11.6.2",
   "engines": {
     "node": ">=24.17.0 <25"
@@ -47,7 +47,7 @@
     "@zip.js/zip.js": "^2.8.26",
     "ai": "^7.0.9",
     "cesium": "1.142.0",
-    "cesium-mcp-runtime": "1.142.1",
+    "cesium-mcp-runtime": "1.142.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -70,7 +70,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
-    "cesium-mcp-bridge": "1.142.1",
+    "cesium-mcp-bridge": "1.142.3",
     "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",

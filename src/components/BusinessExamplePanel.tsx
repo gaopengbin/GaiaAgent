@@ -137,7 +137,7 @@ export function BusinessExamplePanel({
                     </SelectContent>
                   </Select>
                   {compatibleAssets.length === 0 && (
-                    <p className="text-[10px] leading-4 text-amber-200/80">
+                    <p className="text-[10px] leading-4 text-amber-700/80 dark:text-amber-200/80">
                       需要导入一个 {requirement.geometryType} GeoJSON/CSV 可分析资产。
                     </p>
                   )}
@@ -153,7 +153,7 @@ export function BusinessExamplePanel({
           </div>
 
           {!canStartExample && (
-            <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-100/85">
+            <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-800/85 dark:text-amber-100/85">
               还缺少：{missingRoles.map((item) => item.role).join('、')}。请先在「场景」面板导入
               GeoJSON/CSV，或选择已有可分析资产。
             </p>

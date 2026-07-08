@@ -102,6 +102,32 @@ describe('agentTimelineReducer', () => {
     })
   })
 
+  it('stops visible streaming state when a run fails', () => {
+    const runId = 'run-token-budget'
+    const state = [
+      createAgentEvent(runId, { type: 'run.started', goal: '截图' }),
+      createAgentEvent(runId, { type: 'reasoning.status', status: 'streaming' }),
+      createAgentEvent(runId, {
+        type: 'message.delta',
+        messageId: 'answer',
+        text: '截图成功',
+      }),
+      createAgentEvent(runId, {
+        type: 'run.failed',
+        error: {
+          code: 'native_runtime_failed',
+          message: 'Agent run stopped because the token budget was exceeded.',
+          category: 'internal',
+        },
+      }),
+    ].reduce(agentTimelineReducer, initialAgentTimelineState)
+
+    const run = state.runs[runId]
+    expect(run.status).toBe('failed')
+    expect(run.reasoning?.status).toBe('done')
+    expect(run.messages[0]).toMatchObject({ text: '截图成功', streaming: false })
+  })
+
   it('prefers explicit task plans and syncs later tool status into matching steps', () => {
     const runId = 'run-plan'
     const callId = 'call-geocode'

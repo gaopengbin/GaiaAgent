@@ -187,6 +187,117 @@ fn user_turns_for_provider(
     }
 }
 
+const MAX_PROVIDER_TOOL_RESULT_CHARS: usize = 4_000;
+const MAX_PROVIDER_TOOL_JSON_PREVIEW_CHARS: usize = 2_000;
+
+fn compact_tool_result_for_provider(output: &str) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Some(summary) = compact_image_tool_result(trimmed) {
+        return summary;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(summary) = compact_image_tool_result_value(&value) {
+            return summary;
+        }
+        if looks_like_large_spatial_json(&value) || trimmed.len() > MAX_PROVIDER_TOOL_RESULT_CHARS {
+            return format!(
+                "[Tool result omitted from model context: large structured JSON, {} bytes. Compact preview: {}]",
+                trimmed.len(),
+                compact_chars(&summarize_json_value(&value), MAX_PROVIDER_TOOL_JSON_PREVIEW_CHARS)
+            );
+        }
+    }
+
+    if trimmed.len() > MAX_PROVIDER_TOOL_RESULT_CHARS {
+        return format!(
+            "[Tool result truncated for model context: {} bytes. Preview: {}]",
+            trimmed.len(),
+            compact_chars(trimmed, MAX_PROVIDER_TOOL_RESULT_CHARS)
+        );
+    }
+
+    trimmed.to_string()
+}
+
+fn compact_image_tool_result(output: &str) -> Option<String> {
+    if let Some(index) = output.find("data:image/") {
+        let media_type = output[index + "data:".len()..]
+            .split_once(";base64,")
+            .map(|(media_type, _)| media_type)
+            .unwrap_or("image/*");
+        return Some(format!(
+            "[Tool result image omitted from model context: {media_type}, {} bytes. The UI displays the image preview; refer to this tool result by call id if needed.]",
+            output.len()
+        ));
+    }
+    None
+}
+
+fn compact_image_tool_result_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => compact_image_tool_result(text),
+        Value::Array(items) => items.iter().find_map(compact_image_tool_result_value),
+        Value::Object(map) => {
+            for key in ["dataUrl", "image", "url", "output"] {
+                if let Some(summary) = map.get(key).and_then(compact_image_tool_result_value) {
+                    return Some(summary);
+                }
+            }
+            map.get("data").and_then(compact_image_tool_result_value)
+        }
+        _ => None,
+    }
+}
+
+fn compact_chars(value: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    for ch in value.chars().take(max_chars) {
+        output.push(ch);
+    }
+    if value.chars().count() > max_chars {
+        output.push('…');
+    }
+    output
+}
+
+fn looks_like_large_spatial_json(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    matches!(
+        object.get("type").and_then(Value::as_str),
+        Some("FeatureCollection" | "Feature")
+    ) || object.contains_key("features")
+        || object.contains_key("geometry")
+}
+
+fn summarize_json_value(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let keys = map.keys().take(12).cloned().collect::<Vec<_>>().join(", ");
+            let mut parts = vec![format!("object keys=[{keys}]")];
+            if let Some(kind) = map.get("type").and_then(Value::as_str) {
+                parts.push(format!("type={kind}"));
+            }
+            if let Some(features) = map.get("features").and_then(Value::as_array) {
+                parts.push(format!("features={}", features.len()));
+            }
+            if let Some(data) = map.get("data") {
+                parts.push(format!("data={}", summarize_json_value(data)));
+            }
+            parts.join("; ")
+        }
+        Value::Array(items) => format!("array length={}", items.len()),
+        Value::String(text) => compact_chars(text, 240),
+        other => other.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeEvent {
@@ -581,6 +692,7 @@ where
                 let result = match execution {
                     Ok(Ok(output)) => {
                         let artifact_refs = extract_tool_artifact_refs(&output);
+                        let provider_output = compact_tool_result_for_provider(&output);
                         emit(RuntimeEvent::TaskStepUpdated {
                             step_id: call.id.clone(),
                             status: TaskStepStatus::Completed,
@@ -595,7 +707,7 @@ where
                         ProviderToolResult {
                             call_id: call.id.clone(),
                             name: call.name.clone(),
-                            output,
+                            output: provider_output,
                             is_error: false,
                         }
                     }
@@ -1016,9 +1128,21 @@ async fn wait_for_cancellation(cancelled: Arc<AtomicBool>) {
 }
 
 fn transition_error(error: TransitionError) -> ProviderError {
+    let message = match error {
+        TransitionError::RoundBudgetExceeded => {
+            "Agent run stopped because the round budget was exceeded.".to_string()
+        }
+        TransitionError::ToolBudgetExceeded => {
+            "Agent run stopped because the tool-call budget was exceeded.".to_string()
+        }
+        TransitionError::TokenBudgetExceeded => {
+            "Agent run stopped because the token budget was exceeded.".to_string()
+        }
+        other => format!("invalid agent transition: {other:?}"),
+    };
     ProviderError {
         kind: ProviderErrorKind::InvalidRequest,
-        message: format!("invalid agent transition: {error:?}"),
+        message,
         retryable: false,
     }
 }
@@ -1084,6 +1208,20 @@ mod tests {
             Box::pin(async {
                 tokio::time::sleep(Duration::from_millis(30)).await;
                 Ok("late".into())
+            })
+        }
+    }
+
+    struct ScreenshotTool;
+    impl ToolExecutor for ScreenshotTool {
+        fn execute(&self, _call: NativeToolCall) -> AgentFuture<'_, Result<String, String>> {
+            Box::pin(async {
+                Ok(json!({
+                    "data": {
+                        "dataUrl": format!("data:image/png;base64,{}", "A".repeat(2048))
+                    }
+                })
+                .to_string())
             })
         }
     }
@@ -1203,6 +1341,56 @@ mod tests {
         assert_eq!(outcome.run.phase, RunPhase::Completed);
         assert_eq!(outcome.run.tool_calls, 1);
         assert!(matches!(outcome.turns[3], ProviderTurn::ToolResults { .. }));
+    }
+
+    #[tokio::test]
+    async fn compacts_image_tool_results_for_provider_context() {
+        let provider = FakeProvider(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall {
+                    call: NativeToolCall {
+                        id: "screenshot-1".into(),
+                        name: "screenshot".into(),
+                        arguments: json!({}),
+                    },
+                },
+                ProviderEvent::Completed,
+            ],
+            vec![
+                ProviderEvent::TextDelta {
+                    text: "seen".into(),
+                },
+                ProviderEvent::Completed,
+            ],
+        ])));
+        let runtime = AgentRuntime::new(provider, ScreenshotTool, AllowAll);
+        let mut emitted_tool_output = None;
+        let outcome = runtime
+            .run(
+                "r-image".into(),
+                "screenshot".into(),
+                config(),
+                Arc::new(AtomicBool::new(false)),
+                |event| {
+                    if let RuntimeEvent::ToolCompleted { output, .. } = event {
+                        emitted_tool_output = Some(output);
+                    }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(emitted_tool_output
+            .as_deref()
+            .unwrap()
+            .contains("data:image/png;base64"));
+        let ProviderTurn::ToolResults { results } = &outcome.turns[3] else {
+            panic!("expected tool results turn");
+        };
+        assert!(results[0]
+            .output
+            .contains("image omitted from model context"));
+        assert!(!results[0].output.contains("data:image/png;base64"));
     }
 
     #[tokio::test]

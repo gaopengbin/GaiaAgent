@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::Url;
 use rmcp::transport::auth::OAuthState;
@@ -406,6 +407,52 @@ fn validate_mcp_launch(
             }
         }
     }
+
+    if normalized == "npx"
+        && args
+            .iter()
+            .any(|arg| arg.eq_ignore_ascii_case("@modelcontextprotocol/server-fetch"))
+    {
+        return Err(
+            "MCP fetch package '@modelcontextprotocol/server-fetch' is not published on npm. Use 'npx -y mcp-fetch-server' or 'uvx mcp-server-fetch' instead."
+                .into(),
+        );
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_mcp_config(config: &McpConfig) -> Result<(), String> {
+    for (server_id, server) in &config.servers {
+        if server_id.trim().is_empty() {
+            return Err("MCP server id cannot be empty".into());
+        }
+        if server_id.len() > 96
+            || !server_id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+        {
+            return Err(format!("Invalid MCP server id '{server_id}'"));
+        }
+        let transport = server.transport.as_deref().unwrap_or("stdio");
+        match transport {
+            "streamable-http" => {
+                let url = server
+                    .url
+                    .as_deref()
+                    .ok_or_else(|| format!("MCP server '{server_id}' is missing url"))?;
+                validate_remote_mcp_url(url)?;
+            }
+            "stdio" | "" => {
+                validate_mcp_launch(&server.command, &server.args, Some(&server.env))?;
+            }
+            other => {
+                return Err(format!(
+                    "MCP server '{server_id}' uses unsupported transport '{other}'"
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -737,13 +784,17 @@ pub async fn mcp_start_server(
         });
     }
 
-    let client = GaiaMcpClientHandler {
-        app,
-        server_id: server_id.clone(),
-        pending_elicitations: state.pending_elicitations.clone(),
-    }
-    .serve(transport)
+    let client = tokio::time::timeout(
+        Duration::from_secs(30),
+        GaiaMcpClientHandler {
+            app,
+            server_id: server_id.clone(),
+            pending_elicitations: state.pending_elicitations.clone(),
+        }
+        .serve(transport),
+    )
     .await
+    .map_err(|_| format!("MCP initialize handshake timed out for '{server_id}'"))?
     .map_err(|error| format!("MCP initialize handshake failed for '{server_id}': {error}"))?;
     let server_info = serde_json::to_value(client.peer_info()).unwrap_or(Value::Null);
     state.servers.lock().await.insert(
@@ -1131,7 +1182,8 @@ pub async fn mcp_load_config() -> Result<McpConfig, String> {
         return Ok(McpConfig::default());
     }
     let data = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    serde_json::from_str(&data).map_err(|error| error.to_string())
+    serde_json::from_str(data.strip_prefix('\u{feff}').unwrap_or(&data))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1157,6 +1209,17 @@ mod tests {
             Some(&env),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn rejects_unpublished_modelcontextprotocol_fetch_npm_package() {
+        let error = validate_mcp_launch(
+            "npx",
+            &["-y".into(), "@modelcontextprotocol/server-fetch".into()],
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("mcp-fetch-server"));
     }
 
     #[test]

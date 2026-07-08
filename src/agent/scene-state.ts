@@ -25,7 +25,15 @@ function cameraFrom(value: unknown): CameraState | null {
   const lat = finite(view.latitude)
   const lon = finite(view.longitude)
   const height = finite(view.height)
-  return lat === null || lon === null || height === null ? null : { lat, lon, height }
+  if (lat === null || lon === null || height === null) return null
+  return {
+    lat,
+    lon,
+    height,
+    heading: finite(view.heading) ?? undefined,
+    pitch: finite(view.pitch) ?? undefined,
+    roll: finite(view.roll) ?? undefined,
+  }
 }
 
 function isImportMarker(value: unknown) {

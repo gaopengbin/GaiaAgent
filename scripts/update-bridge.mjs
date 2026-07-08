@@ -27,8 +27,49 @@ function replaceOnce(source, before, after, label) {
   return source.replace(before, after)
 }
 
+function replaceOnceOrAlready(source, before, after, label, already) {
+  if (source.includes(before)) {
+    return source.replace(before, after)
+  }
+  const alreadyApplied =
+    typeof already === 'string'
+      ? source.includes(already)
+      : Array.isArray(already)
+        ? already.every((snippet) => source.includes(snippet))
+        : false
+  if (alreadyApplied) return source
+  throw new Error(`[update-bridge] unable to apply bridge patch: ${label}`)
+}
+
 function patchBridge(source) {
   let patched = source.replace(/\r\n/g, '\n')
+
+  patched = replaceOnceOrAlready(
+    patched,
+    `  function setView(viewer, params) {
+    const { longitude, latitude, height = 5e4, heading = 0, pitch = -45 } = params;
+    validateCoordinate(longitude, latitude, height);
+    const target = Cesium2.Cartesian3.fromDegrees(longitude, latitude, 0);
+    const range = _heightToRange(height, pitch);`,
+    `  function setView(viewer, params) {
+    const { longitude, latitude, height = 5e4, heading = 0, pitch = -45, roll = 0, absolute = false } = params;
+    validateCoordinate(longitude, latitude, height);
+    if (absolute) {
+      viewer.camera.setView({
+        destination: Cesium2.Cartesian3.fromDegrees(longitude, latitude, height),
+        orientation: {
+          heading: Cesium2.Math.toRadians(heading),
+          pitch: Cesium2.Math.toRadians(pitch),
+          roll: Cesium2.Math.toRadians(roll)
+        }
+      });
+      return;
+    }
+    const target = Cesium2.Cartesian3.fromDegrees(longitude, latitude, 0);
+    const range = _heightToRange(height, pitch);`,
+    'setView absolute camera restore',
+    `absolute = false`,
+  )
 
   patched = replaceOnce(
     patched,
@@ -217,7 +258,7 @@ function patchBridge(source) {
     'addWall id/show',
   )
 
-  patched = replaceOnce(
+  patched = replaceOnceOrAlready(
     patched,
     `    addMarker(params) {
       const entity = addMarker(this._viewer, params);
@@ -227,8 +268,9 @@ function patchBridge(source) {
       this.removeLayer(layerId);
       const entity = addMarker(this._viewer, params);`,
     'addMarker stable layer',
+    `      const layerId = \`marker_\${entity.id}\`;`,
   )
-  patched = replaceOnce(
+  patched = replaceOnceOrAlready(
     patched,
     `    addPolyline(params) {
       const entity = addPolyline(this._viewer, params);
@@ -238,8 +280,9 @@ function patchBridge(source) {
       this.removeLayer(layerId);
       const entity = addPolyline(this._viewer, params);`,
     'addPolyline stable layer',
+    `      const layerId = \`polyline_\${entity.id}\`;`,
   )
-  patched = replaceOnce(
+  patched = replaceOnceOrAlready(
     patched,
     `    addPolygon(params) {
       const entity = addPolygon(this._viewer, params);
@@ -249,8 +292,9 @@ function patchBridge(source) {
       this.removeLayer(layerId);
       const entity = addPolygon(this._viewer, params);`,
     'addPolygon stable layer',
+    `      const layerId = \`polygon_\${entity.id}\`;`,
   )
-  patched = replaceOnce(
+  patched = replaceOnceOrAlready(
     patched,
     `    addModel(params) {
       const entity = addModel(this._viewer, params);
@@ -260,15 +304,17 @@ function patchBridge(source) {
       this.removeLayer(layerId);
       const entity = addModel(this._viewer, params);`,
     'addModel stable layer',
+    `      const layerId = \`model_\${entity.id}\`;`,
   )
 
-  patched = replaceOnce(
+  patched = replaceOnceOrAlready(
     patched,
     `    _registerEntityLayer(entity, type, name, color) {
       const layerId = \`\${type}_\${Date.now()}\`;`,
     `    _registerEntityLayer(entity, type, name, color, layerIdHint) {
       const layerId = layerIdHint ?? (entity.id ? \`\${type}_\${entity.id}\` : \`\${type}_\${Date.now()}\`);`,
     'register entity stable layer',
+    `      const layerId = \`\${type}_\${entity.id}\`;`,
   )
 
   const entityWrappers = [
@@ -295,7 +341,51 @@ function patchBridge(source) {
     )
   }
 
-  patched = replaceOnce(
+  patched = replaceOnceOrAlready(
+    patched,
+    `    results.push({
+      entityId: entity.id,
+      name: name ? String(name) : void 0,
+      type,
+      position
+    });`,
+    `    results.push({
+      entityId: entity.id,
+      name: name ? String(name) : void 0,
+      type,
+      visible: entity.show !== false,
+      position
+    });`,
+    'queryEntities visible',
+    `      visible: entity.show !== false,`,
+  )
+
+  patched = replaceOnceOrAlready(
+    patched,
+    `    return {
+      entityId: entity.id,
+      name: entity.name ?? void 0,
+      type,
+      position,
+      properties,
+      graphicProperties,
+      description
+    };`,
+    `    return {
+      entityId: entity.id,
+      name: entity.name ?? void 0,
+      type,
+      visible: entity.show !== false,
+      position,
+      properties,
+      graphicProperties,
+      description
+    };`,
+    'getEntityProperties visible',
+    `      visible: entity.show !== false,`,
+  )
+
+  patched = replaceOnceOrAlready(
     patched,
     `    exportScene() {
       return {
@@ -312,6 +402,7 @@ function patchBridge(source) {
           return {
             ...entity,
             name: entity.name ?? details.name,
+            visible: entity.visible ?? details.visible,
             position: entity.position ?? details.position,
             graphicProperties: details.graphicProperties,
             properties: details.properties,
@@ -329,6 +420,10 @@ function patchBridge(source) {
       };
     }`,
     'exportScene entity details',
+    [
+      `      const entities = this.queryEntities({}).map((entity) => {`,
+      `            graphicProperties: details.graphicProperties,`,
+    ],
   )
 
   return patched

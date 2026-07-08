@@ -6,6 +6,7 @@ import type { ConnStatus } from '../types'
 import { uid } from '../lib/utils'
 import {
   agentTimelineReducer,
+  applyAiSandboxPatch,
   createAgentEvent,
   initialAgentTimelineState,
   normalizeAgentTimelineState,
@@ -36,7 +37,7 @@ import {
 import { geoJsonToCsv } from '../agent/geojson-csv'
 import { mergeMissingSceneAssets } from '../agent/scene-reconcile'
 import { buildSceneReplayCommands } from '../agent/scene-replay'
-import { applySceneSnapshot } from '../agent/scene-state'
+import { applySceneSnapshot, syncSceneCollections } from '../agent/scene-state'
 import type {
   AgentEvent,
   AgentRunContinuation,
@@ -117,6 +118,14 @@ interface McpServerConfig {
   url?: string
   auth?: 'none' | 'oauth'
   oauthScopes?: string[]
+}
+
+function changedMcpServerIds(paths: string[]) {
+  return new Set(
+    paths
+      .map((path) => path.match(/^\$\.servers\.([^.]+)/)?.[1])
+      .filter((id): id is string => Boolean(id)),
+  )
 }
 
 export interface ChatSessionSummary {
@@ -240,6 +249,12 @@ interface ReplayableBridge {
   addRectangle?: (params: Record<string, unknown>) => unknown
   addWall?: (params: Record<string, unknown>) => unknown
   addCorridor?: (params: Record<string, unknown>) => unknown
+  updateEntity?: (params: Record<string, unknown>) => unknown
+  setLayerVisibility?: (id: string, visible: boolean) => unknown
+  zoomToLayer?: (id: string) => unknown
+  trackEntity?: (params: Record<string, unknown>) => unknown
+  flyTo?: (params: Record<string, unknown>) => unknown
+  zoomToExtent?: (params: Record<string, unknown>) => unknown
   setView?: (params: Record<string, unknown>) => unknown
   exportScene?: () => unknown
 }
@@ -247,6 +262,7 @@ interface ReplayableBridge {
 const SESSION_STORAGE_KEY = 'gaia-agent.chat-sessions.v1'
 const SESSION_TIMELINE_PREFIX = 'gaia-agent.chat-timeline.'
 const SESSION_SCENE_PREFIX = 'gaia-agent.scene-state.'
+const MAX_LOCAL_SCENE_CACHE_BYTES = 1_500_000
 const TASK_PLAN_SNAPSHOT_VERSION = 1 as const
 
 function fallbackSession(): ChatSessionSummary {
@@ -371,7 +387,18 @@ function loadSceneState(sessionId: string): SceneState {
 }
 
 function saveSceneState(sessionId: string, scene: SceneState) {
-  localStorage.setItem(sceneKey(sessionId), JSON.stringify(cloneSceneState(scene)))
+  const key = sceneKey(sessionId)
+  try {
+    const payload = JSON.stringify(cloneSceneState(scene))
+    if (payload.length > MAX_LOCAL_SCENE_CACHE_BYTES) {
+      localStorage.removeItem(key)
+      return
+    }
+    localStorage.setItem(key, payload)
+  } catch (error) {
+    localStorage.removeItem(key)
+    console.warn('[agent] skipped local scene cache:', error)
+  }
 }
 
 function isEmptySceneState(scene: SceneState) {
@@ -383,8 +410,85 @@ function isEmptySceneState(scene: SceneState) {
   )
 }
 
+function hasSceneContent(scene: SceneState) {
+  return scene.layers.length > 0 || scene.labels.length > 0 || Object.keys(scene.assets).length > 0
+}
+
+function bridgeSnapshotHasContent(snapshot: unknown) {
+  if (!isRecord(snapshot)) return false
+  return (
+    (Array.isArray(snapshot.layers) && snapshot.layers.length > 0) ||
+    (Array.isArray(snapshot.entities) && snapshot.entities.length > 0)
+  )
+}
+
+function cameraForBbox(bbox: [number, number, number, number]) {
+  const [west, south, east, north] = bbox
+  const lon = (west + east) / 2
+  const lat = (south + north) / 2
+  const span = Math.max(Math.abs(east - west), Math.abs(north - south), 0.01)
+  return {
+    longitude: lon,
+    latitude: lat,
+    height: Math.max(1200, span * 180_000),
+  }
+}
+
 function sceneAssetDisplayName(asset: SpatialAsset) {
   return asset.name || asset.id || asset.ref
+}
+
+function entityLayerPrefix(asset: SpatialAsset) {
+  const type = asset.type.trim().toLowerCase()
+  if (type === 'point') return 'marker'
+  if (
+    [
+      'marker',
+      'polyline',
+      'polygon',
+      'model',
+      'billboard',
+      'box',
+      'cylinder',
+      'ellipse',
+      'rectangle',
+      'wall',
+      'corridor',
+    ].includes(type)
+  ) {
+    return type
+  }
+  return undefined
+}
+
+function layerMatchesEntity(layer: SpatialAsset, entity: SpatialAsset) {
+  if (layer.kind !== 'layer' || entity.kind !== 'entity') return false
+  const prefix = entityLayerPrefix(entity)
+  if (
+    prefix &&
+    (layer.id === `${prefix}_${entity.id}` || layer.dataRefId === `${prefix}_${entity.id}`)
+  ) {
+    return true
+  }
+  const sameCall =
+    layer.lastCallId !== undefined &&
+    entity.lastCallId !== undefined &&
+    layer.lastCallId === entity.lastCallId
+  const sameName =
+    (layer.name || layer.id).trim().toLowerCase() ===
+    (entity.name || entity.id).trim().toLowerCase()
+  if (sameCall && sameName) return true
+  if (
+    sameCall &&
+    ['marker', 'point', 'billboard'].includes(entity.type.trim().toLowerCase()) &&
+    layer.id.startsWith('marker_')
+  ) {
+    return true
+  }
+  if (sameCall && entity.type.trim().toLowerCase() === 'label' && layer.id.startsWith('label_')) {
+    return true
+  }
+  return false
 }
 
 function isProtectedSceneAsset(asset: SpatialAsset) {
@@ -679,7 +783,28 @@ function getReplayableBridge() {
   return (window as unknown as { __bridge?: ReplayableBridge }).__bridge
 }
 
-function replaySceneOnBridge(scene: SceneState) {
+function waitForReplayableBridge(timeoutMs = 5000) {
+  const startedAt = Date.now()
+  return new Promise<ReplayableBridge | undefined>((resolve) => {
+    const tick = () => {
+      const bridge = getReplayableBridge()
+      if (bridge || Date.now() - startedAt >= timeoutMs) {
+        resolve(bridge)
+        return
+      }
+      window.setTimeout(tick, 120)
+    }
+    tick()
+  })
+}
+
+function nextBridgeFrame() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve())
+  })
+}
+
+async function replaySceneOnBridge(scene: SceneState) {
   const bridge = getReplayableBridge()
   if (!bridge) {
     return {
@@ -691,15 +816,17 @@ function replaySceneOnBridge(scene: SceneState) {
     }
   }
 
-  bridge.clearAll?.()
   let replayed = 0
   let failed = 0
   const commands = buildSceneReplayCommands(scene)
+  if (commands.length > 0) {
+    bridge.clearAll?.()
+  }
   for (const command of commands) {
     const method = bridge[command.method]
     if (typeof method !== 'function') continue
     try {
-      method.call(bridge, command.params)
+      await Promise.resolve(method.call(bridge, command.params))
       replayed += 1
     } catch (error) {
       failed += 1
@@ -711,8 +838,13 @@ function replaySceneOnBridge(scene: SceneState) {
       latitude: scene.camera.lat,
       longitude: scene.camera.lon,
       height: scene.camera.height,
+      heading: scene.camera.heading,
+      pitch: scene.camera.pitch,
+      roll: scene.camera.roll,
+      absolute: true,
     })
   }
+  await nextBridgeFrame()
   return {
     replayed,
     skipped:
@@ -853,9 +985,9 @@ export function useTauriAgent() {
   )
 
   const replayCurrentSceneToBridge = useCallback(
-    (sessionId = currentSessionIdRef.current) => {
+    async (sessionId = currentSessionIdRef.current) => {
       const previousScene = cloneSceneState(sceneRef.current)
-      const replay = replaySceneOnBridge(sceneRef.current)
+      const replay = await replaySceneOnBridge(sceneRef.current)
       if (!replay.bridgeReady) return replay
       if (replay.snapshot) {
         applySceneSnapshot(sceneRef.current, replay.snapshot, `session-restore:${sessionId}`)
@@ -870,18 +1002,32 @@ export function useTauriAgent() {
   const restoreSceneState = useCallback(
     (sessionId: string) => {
       const localScene = loadSceneState(sessionId)
+      const localHasContent = hasSceneContent(localScene)
       sceneRef.current = localScene
       currentSessionIdRef.current = sessionId
       publishSceneState(sessionId, false)
-      replayCurrentSceneToBridge(sessionId)
+      if (localHasContent && getReplayableBridge()) {
+        void replayCurrentSceneToBridge(sessionId)
+      } else if (localScene.camera && getReplayableBridge()) {
+        void replaySceneOnBridge(localScene)
+      }
 
       void invoke<SceneState>('agent_scene_get_state', { sessionId })
         .then((remoteScene) => {
-          if (!isEmptySceneState(remoteScene) || isEmptySceneState(localScene)) {
+          const remoteHasContent = hasSceneContent(remoteScene)
+          if (
+            remoteHasContent ||
+            (!localHasContent &&
+              (isEmptySceneState(localScene) || !hasSceneContent(sceneRef.current)))
+          ) {
             sceneRef.current = cloneSceneState(remoteScene)
             publishSceneState(sessionId)
-            replayCurrentSceneToBridge(sessionId)
-          } else {
+            if (remoteHasContent) {
+              void replayCurrentSceneToBridge(sessionId)
+            } else if (remoteScene.camera) {
+              void replaySceneOnBridge(remoteScene)
+            }
+          } else if (localHasContent) {
             void invoke('agent_scene_save_state', { sessionId, scene: localScene }).catch((error) =>
               console.warn('[agent] failed to seed remote scene state:', error),
             )
@@ -893,8 +1039,15 @@ export function useTauriAgent() {
   )
 
   const applyBridgeSceneSnapshot = useCallback(
-    (snapshot: unknown, callId?: string) => {
+    (snapshot: unknown, callId?: string, options: { preserveMissingAssets?: boolean } = {}) => {
+      if (!callId && hasSceneContent(sceneRef.current) && !bridgeSnapshotHasContent(snapshot)) {
+        return null
+      }
+      const previousScene = cloneSceneState(sceneRef.current)
       const patch = applySceneSnapshot(sceneRef.current, snapshot, callId)
+      if (options.preserveMissingAssets !== false) {
+        mergeMissingSceneAssets(sceneRef.current, previousScene, { preserveAll: true })
+      }
       publishSceneState()
       const runId = currentRunIdRef.current
       if (patch && runId) {
@@ -993,8 +1146,8 @@ export function useTauriAgent() {
 
   const clearCurrentContext = useCallback(async () => {
     const sessionId = currentSessionIdRef.current
-    await invoke('agent_clear_session', { sessionId }).catch((error) => {
-      console.warn('[agent] failed to clear native session:', error)
+    await invoke('agent_clear_context', { sessionId }).catch((error) => {
+      console.warn('[agent] failed to clear native context:', error)
       throw error
     })
     await invoke('agent_task_plan_clear_snapshot', { sessionId }).catch((error) => {
@@ -1004,8 +1157,44 @@ export function useTauriAgent() {
     setStatusText('当前会话上下文已清空')
   }, [])
 
+  const compactCurrentContext = useCallback(async () => {
+    const sessionId = currentSessionIdRef.current
+    await invoke('agent_compact_session', { sessionId }).catch((error) => {
+      console.warn('[agent] failed to compact native session:', error)
+      throw error
+    })
+    setStatusText('当前会话上下文已压缩')
+  }, [])
+
   const updateModelSettings = useCallback((settings: ModelSettings) => {
     settingsRef.current = { ...settings, agentRuntime: 'native' }
+  }, [])
+
+  const startMcpServerFromConfig = useCallback(async (id: string, cfg: McpServerConfig) => {
+    window.dispatchEvent(new CustomEvent('mcp-server-starting', { detail: id }))
+    try {
+      if (cfg.transport === 'streamable-http' && cfg.url) {
+        await invoke(cfg.auth === 'oauth' ? 'mcp_connect_remote_oauth' : 'mcp_connect_remote', {
+          serverId: id,
+          url: cfg.url,
+        })
+      } else {
+        await invoke('mcp_start_server', {
+          serverId: id,
+          command: cfg.command,
+          args: cfg.args,
+          env: Object.keys(cfg.env ?? {}).length > 0 ? cfg.env : null,
+        })
+      }
+      window.dispatchEvent(new CustomEvent('mcp-server-started', { detail: id }))
+    } catch (error) {
+      window.dispatchEvent(
+        new CustomEvent('mcp-server-failed', {
+          detail: { id, error: String(error) },
+        }),
+      )
+      throw error
+    }
   }, [])
 
   const refreshMcpStatus = useCallback(async () => {
@@ -1026,6 +1215,44 @@ export function useTauriAgent() {
       console.error('Failed to refresh MCP status:', error)
     }
   }, [])
+
+  const applySandboxPatchAndStartMcp = useCallback(
+    async (patchId: string) => {
+      try {
+        setStatusText('正在应用 AI 配置补丁…')
+        const result = await applyAiSandboxPatch(patchId)
+        if (result.patch.target !== 'mcp-servers') {
+          setStatusText('配置补丁已应用')
+          return result
+        }
+        const proposed = result.patch.proposed as { servers?: Record<string, McpServerConfig> }
+        const servers = proposed.servers ?? {}
+        const running = new Set(await invoke<string[]>('mcp_list_servers').catch(() => []))
+        const changedIds = changedMcpServerIds(result.patch.changedPaths)
+        const enabled = Object.entries(servers).filter(
+          ([id, cfg]) => cfg.enabled !== false && (changedIds.size === 0 || changedIds.has(id)),
+        )
+        for (const [id, cfg] of enabled) {
+          if (running.has(id)) continue
+          setStatusText(`正在启动 MCP: ${id}…`)
+          await startMcpServerFromConfig(id, cfg)
+        }
+        window.dispatchEvent(new Event('mcp-tools-changed'))
+        await refreshMcpStatus()
+        setStatusText(
+          enabled.length > 0
+            ? `配置已应用，MCP 已就绪：${enabled.map(([id]) => id).join(', ')}`
+            : '配置已应用，没有需要启动的 MCP',
+        )
+        return result
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        setStatusText(`应用配置失败：${message}`)
+        throw error
+      }
+    },
+    [refreshMcpStatus, startMcpServerFromConfig],
+  )
 
   useEffect(() => {
     let mounted = true
@@ -1054,6 +1281,10 @@ export function useTauriAgent() {
         if (!mounted) return
 
         setStatus('connected')
+        void waitForReplayableBridge().then(() => {
+          if (!mounted) return
+          restoreSceneState(currentSessionIdRef.current)
+        })
         setStatusText(`已连接，${toolsRef.current.length} 个 GIS 工具就绪`)
 
         const toStart = Object.entries(mcpCfg.servers).filter(([, cfg]) => cfg.enabled)
@@ -1114,20 +1345,17 @@ export function useTauriAgent() {
       window.removeEventListener('mcp-tools-changed', handleMcpChanged)
       void unlistenMcpChanges.then((dispose) => dispose?.())
     }
-  }, [applyBridgeSceneSnapshot, refreshMcpStatus])
+  }, [applyBridgeSceneSnapshot, refreshMcpStatus, restoreSceneState])
 
   const refreshSceneState = useCallback(
     async (options: { preserveStructuredAssets?: boolean } = {}) => {
-      const previousScene = cloneSceneState(sceneRef.current)
       const snapshot = getReplayableBridge()?.exportScene?.()
       if (!snapshot) return
-      applyBridgeSceneSnapshot(snapshot)
-      if (options.preserveStructuredAssets === false) return
-      if (mergeMissingSceneAssets(sceneRef.current, previousScene)) {
-        publishSceneState()
-      }
+      applyBridgeSceneSnapshot(snapshot, undefined, {
+        preserveMissingAssets: options.preserveStructuredAssets !== false,
+      })
     },
-    [applyBridgeSceneSnapshot, publishSceneState],
+    [applyBridgeSceneSnapshot],
   )
 
   const invokeSceneTool = useCallback(
@@ -1150,11 +1378,86 @@ export function useTauriAgent() {
     [publishSceneState, refreshSceneState],
   )
 
+  const patchSceneObjectRefs = useCallback(
+    (refs: string[], patch: Partial<SpatialAsset>) => {
+      const uniqueRefs = [...new Set(refs)]
+      const nextAssets = { ...sceneRef.current.assets }
+      let changed = false
+      for (const ref of uniqueRefs) {
+        const current = nextAssets[ref]
+        if (!current) continue
+        nextAssets[ref] = {
+          ...current,
+          ...patch,
+          position: patch.position
+            ? { ...patch.position }
+            : current.position
+              ? { ...current.position }
+              : undefined,
+          render: patch.render
+            ? { ...patch.render }
+            : current.render
+              ? { ...current.render }
+              : undefined,
+        }
+        changed = true
+      }
+      if (!changed) return
+      sceneRef.current = {
+        ...sceneRef.current,
+        revision: sceneRef.current.revision + 1,
+        assets: nextAssets,
+      }
+      syncSceneCollections(sceneRef.current)
+      publishSceneState()
+    },
+    [publishSceneState],
+  )
+
   const setSceneObjectVisibility = useCallback(
     async (asset: SpatialAsset, visible: boolean) => {
+      const bridge = getReplayableBridge()
+      let appliedToMap = false
+      const allAssets = Object.values(sceneRef.current.assets)
+      const relatedLayers =
+        asset.kind === 'entity'
+          ? allAssets.filter((candidate) => layerMatchesEntity(candidate, asset))
+          : []
+      const relatedEntities =
+        asset.kind === 'layer'
+          ? allAssets.filter((candidate) => layerMatchesEntity(asset, candidate))
+          : []
+      const primaryLayer = asset.kind === 'layer' ? asset : relatedLayers[0]
+      if (bridge) {
+        try {
+          if (primaryLayer && typeof bridge.setLayerVisibility === 'function') {
+            await Promise.resolve(bridge.setLayerVisibility(primaryLayer.id, visible))
+            appliedToMap = true
+          } else if (asset.kind === 'entity' && typeof bridge.updateEntity === 'function') {
+            appliedToMap = !!(await Promise.resolve(
+              bridge.updateEntity({ entityId: asset.id, show: visible }),
+            ))
+          }
+        } catch (error) {
+          console.warn('[scene] direct visibility update failed:', error)
+        }
+      }
+      if (appliedToMap) {
+        patchSceneObjectRefs(
+          [
+            asset.ref,
+            primaryLayer?.ref,
+            ...relatedLayers.map((layer) => layer.ref),
+            ...relatedEntities.map((entity) => entity.ref),
+          ].filter((ref): ref is string => typeof ref === 'string'),
+          { visible },
+        )
+        await refreshSceneState()
+        return
+      }
       await invokeSceneTool('scene_set_visibility', { ref: asset.ref, visible })
     },
-    [invokeSceneTool],
+    [invokeSceneTool, patchSceneObjectRefs, refreshSceneState],
   )
 
   const renameSceneObject = useCallback(
@@ -1373,7 +1676,7 @@ export function useTauriAgent() {
         revision: Math.max(sceneRef.current.revision, imported.revision) + 1,
       })
       const importedScene = cloneSceneState(sceneRef.current)
-      const replay = replaySceneOnBridge(sceneRef.current)
+      const replay = await replaySceneOnBridge(sceneRef.current)
       let refreshedFromMap = false
       let preservedStructuredAssets = false
       if (replay.snapshot) {
@@ -1407,14 +1710,14 @@ export function useTauriAgent() {
   }, [publishSceneState])
 
   const applyDeliverablesPackageImport = useCallback(
-    (packageData: SceneDeliverablesPackageReadResult, imported: SceneState) => {
+    async (packageData: SceneDeliverablesPackageReadResult, imported: SceneState) => {
       const sessionId = currentSessionIdRef.current
       sceneRef.current = cloneSceneState({
         ...imported,
         revision: Math.max(sceneRef.current.revision, imported.revision) + 1,
       })
       const importedScene = cloneSceneState(sceneRef.current)
-      const replay = replaySceneOnBridge(sceneRef.current)
+      const replay = await replaySceneOnBridge(sceneRef.current)
       let refreshedFromMap = false
       let preservedStructuredAssets = false
       if (replay.snapshot) {
@@ -1488,7 +1791,7 @@ export function useTauriAgent() {
     if (!pending) return
     pendingDeliverablesImportRef.current = null
     setPendingDeliverablesImport(null)
-    applyDeliverablesPackageImport(pending.packageData, pending.imported)
+    void applyDeliverablesPackageImport(pending.packageData, pending.imported)
   }, [applyDeliverablesPackageImport])
 
   const cancelDeliverablesPackageImport = useCallback(() => {
@@ -1613,7 +1916,42 @@ export function useTauriAgent() {
   const focusSceneObject = useCallback(
     async (asset: SpatialAsset) => {
       selectSceneObject(asset)
-      await invokeSceneTool('scene_focus_object', { ref: asset.ref })
+      const bridge = getReplayableBridge()
+      let focusedOnMap = false
+      if (bridge) {
+        try {
+          if (asset.kind === 'layer' && typeof bridge.zoomToLayer === 'function') {
+            await Promise.resolve(bridge.zoomToLayer(asset.id))
+            focusedOnMap = true
+          } else if (asset.kind === 'entity' && typeof bridge.trackEntity === 'function') {
+            await Promise.resolve(
+              bridge.trackEntity({ entityId: asset.id, pitch: -35, range: 2_000 }),
+            )
+            focusedOnMap = true
+          } else if (asset.bbox && typeof bridge.zoomToExtent === 'function') {
+            await Promise.resolve(bridge.zoomToExtent({ bbox: asset.bbox, duration: 1 }))
+            focusedOnMap = true
+          } else if (asset.position && typeof bridge.flyTo === 'function') {
+            await Promise.resolve(
+              bridge.flyTo({
+                longitude: asset.position.lon,
+                latitude: asset.position.lat,
+                height: Math.max(asset.position.height ?? 0, 1500),
+                duration: 1,
+              }),
+            )
+            focusedOnMap = true
+          } else if (asset.bbox && typeof bridge.flyTo === 'function') {
+            await Promise.resolve(bridge.flyTo({ ...cameraForBbox(asset.bbox), duration: 1 }))
+            focusedOnMap = true
+          }
+        } catch (error) {
+          console.warn('[scene] direct focus failed:', error)
+        }
+      }
+      if (!focusedOnMap) {
+        await invokeSceneTool('scene_focus_object', { ref: asset.ref })
+      }
     },
     [invokeSceneTool, selectSceneObject],
   )
@@ -2069,6 +2407,17 @@ export function useTauriAgent() {
             )
           } else if (runtimeEvent.phase === 'failed') {
             setStatusText('运行失败')
+            dispatchAgentEvent(
+              createAgentEvent(runId, {
+                type: 'run.failed',
+                error: {
+                  code: 'native_runtime_failed',
+                  message: 'Native Runtime reported a failed phase.',
+                  category: 'internal',
+                  retryable: true,
+                },
+              }),
+            )
           }
           return
         }
@@ -2646,10 +2995,12 @@ export function useTauriAgent() {
     retryTaskStep,
     skipTaskStep,
     replanTaskStep,
+    applySandboxPatchAndStartMcp,
     createSession,
     switchSession,
     deleteSession,
     clearCurrentContext,
+    compactCurrentContext,
     refreshSceneState,
     replayCurrentSceneToBridge,
     setSceneObjectVisibility,
