@@ -6,6 +6,10 @@ target/
 # Environment
 .env
 .env.local
+tauri-release.key
+tauri-release.key.pub
+tauri-release-password.tmp
+tauri-sign-test.bin
 
 # IDE
 .idea/
