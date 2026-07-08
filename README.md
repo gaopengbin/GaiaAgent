@@ -1,12 +1,13 @@
 <div align="center">
   <img src="src-tauri/icons/128x128.png" alt="GaiaAgent Icon" width="80" />
   <h1>GaiaAgent</h1>
-  <p><strong>🌍 AI-Powered 3D GIS Assistant — Talk to 3D Globe in natural language</strong></p>
+  <p><strong>AI-native GIS workspace for operating a 3D globe, MCP tools, and geospatial task workflows through conversation.</strong></p>
 
+  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.0"><img src="https://img.shields.io/badge/release-v0.3.0-blue?style=flat-square" alt="Release v0.3.0" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gaopengbin/GaiaAgent?style=flat-square" alt="License" /></a>
-  <a href="https://github.com/gaopengbin/GaiaAgent/stargazers"><img src="https://img.shields.io/github/stars/gaopengbin/GaiaAgent?style=flat-square" alt="Stars" /></a>
+  <a href="https://github.com/gaopengbin/GaiaAgent/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gaopengbin/GaiaAgent/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>
   <a href="https://github.com/gaopengbin/cesium-mcp"><img src="https://img.shields.io/badge/built%20on-cesium--mcp-blue?style=flat-square" alt="cesium-mcp" /></a>
-  <a href="https://tauri.app/"><img src="https://img.shields.io/badge/Tauri-2.0-orange?style=flat-square&logo=tauri" alt="Tauri 2" /></a>
+  <a href="https://tauri.app/"><img src="https://img.shields.io/badge/Tauri-2-orange?style=flat-square&logo=tauri" alt="Tauri 2" /></a>
 
   <br/><br/>
   <a href="README.zh-CN.md">简体中文</a> | English
@@ -14,101 +15,144 @@
   <img src="docs/resource/124_1x_shots_so.png" alt="GaiaAgent Preview" width="800" />
 </div>
 
-<br/>
+## What is GaiaAgent?
 
-GaiaAgent is a desktop / web AI assistant that lets you control a live [CesiumJS](https://cesium.com/) 3D globe through conversation. It connects LLM reasoning with real-time geospatial visualization via the [cesium-mcp](https://github.com/gaopengbin/cesium-mcp) protocol.
+GaiaAgent is a desktop AI GIS application built with Tauri, React, Rust, CesiumJS, and MCP. It lets an assistant reason about a geospatial task, call GIS tools, operate a live 3D map, remember scene state, and package task deliverables.
 
-## ✨ Features
+The product direction is not just “chat with a map”. GaiaAgent is becoming a controllable GeoAgent workbench:
 
-- 🗣️ **Natural Language Control** — Ask questions, the AI executes GIS operations on the 3D globe
-- 🧠 **Multi-LLM Support** — Ollama, OpenAI, DeepSeek, Qwen, Claude, and any OpenAI-compatible API
-- 🗺️ **72+ GIS Tools** — Camera, entities, layers, heatmaps, trajectories, 3D Tiles, terrain, and more
-- 🖥️ **Desktop App** — Tauri 2 native app (~8 MB), cross-platform
-- 🔄 **ReAct Agent Loop** — Think → Act → Observe multi-round reasoning with automatic error recovery
-- 🔌 **MCP Protocol** — Full stdio MCP support, add custom MCP servers (maps, data, AI, etc.)
-- 📊 **Token Tracking** — Per-round token consumption displayed in chat
-- 📋 **Visual Plan Cards** — AI decomposes tasks into step-by-step plans with live execution status
+- a conversation panel for planning, tool execution, approvals, and multimodal context;
+- a Cesium-powered 3D scene that can be restored per conversation;
+- an MCP host that can run local and remote tools;
+- a GIS-style scene/layer tree for reviewing and managing map objects;
+- a guarded AI configuration sandbox so the agent can propose capability fixes without silently mutating the app.
 
-## 🏗️ Architecture
+## Download
+
+Latest release: [GaiaAgent v0.3.0](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.0)
+
+Published artifacts include:
+
+- Windows x64: `.exe` installer and `.msi`
+- macOS Apple Silicon: `.dmg`
+- Linux x64: `.AppImage`, `.deb`, `.rpm`
+
+## Highlights in v0.3.0
+
+- **Native agent runtime**: Rust-side model loop, provider adapters, tool execution, cancellation, timeouts, budgets, approval modes, and trace events.
+- **CC Switch / Claude-friendly provider routing**: OpenAI-compatible, Anthropic/Claude, Ollama, CC Switch gateways, and local/remote base URL health checks.
+- **MCP host improvements**: local stdio servers, remote streamable HTTP, OAuth foundation, elicitation handling, server status, and safer launcher validation.
+- **AI configuration sandbox**: the agent can prepare MCP configuration patches; users review and apply them before real config writes happen.
+- **Conversation context controls**: status panel, manual compaction, automatic tool-result compaction, token warnings, and safer context clearing that does not wipe the scene.
+- **Scene persistence**: conversations and map scenes are bound together; refresh/session switch can restore camera and map objects.
+- **GIS-style scene tree**: layers are primary nodes, helper entities are folded under layers, with locate / visibility / rename / lock / delete actions.
+- **Multimodal chat**: pasted/uploaded images are sent as model attachments, rendered in user messages, and image tool outputs are shown as previews instead of raw base64.
+- **Markdown and tool UI polish**: rendered GFM tables/lists/code, loading/streaming states, expandable thoughts, tool cards, and clickable suggested next steps.
+- **Deliverables workflow**: scene JSON, Markdown report, GeoJSON/CSV assets, analysis results, and ZIP package import/export foundations.
+
+## Features
+
+### AI + GIS interaction
+
+- Natural-language map operations: fly to locations, add markers, load layers, analyze spatial data, measure, filter, buffer, and export results.
+- Tool-aware task planning with live plan cards, approval controls, retry / skip / replan, and traceable tool bindings.
+- Three execution modes inspired by Codex-style autonomy:
+  - safe: read-only operations are automatic, risky work requires confirmation;
+  - balanced: map operations can run, higher-risk operations require confirmation;
+  - auto: the agent proceeds as automatically as policy allows.
+
+### Scene and data workbench
+
+- Per-session scene state with camera, layers, entities, assets, active object, and recent object refs.
+- GIS-style scene panel for layer/entity management.
+- Import/export:
+  - GaiaAgent scene JSON
+  - GeoJSON / CSV
+  - Markdown report
+  - deliverables ZIP package
+- Basic analysis asset registry and business-example workflow entry.
+
+### MCP and extensibility
+
+- Built-in Cesium MCP runtime support with GIS toolsets such as camera, entity, layer, tiles, heatmap, trajectory, interaction, scene, and geolocation.
+- Add custom MCP servers from the app UI or through the AI configuration sandbox.
+- Local command validation and bounded environment handling reduce accidental or malicious launcher misuse.
+- Remote MCP support is scoped to safer endpoints; OAuth and elicitation flows are part of the host foundation.
+
+### Model and context management
+
+- Supports OpenAI-compatible providers, Anthropic/Claude-style providers, Ollama, and CC Switch local proxy workflows.
+- Context status panel shows turn count, estimated bytes, and compaction summary.
+- Manual “compact context” keeps recent turns and summarizes older history.
+- Large image/tool outputs are compacted for provider context while remaining visible in the UI.
+
+## Architecture
 
 ```mermaid
 graph TB
-    subgraph Frontend["🖥️ React Frontend"]
-        Chat["💬 Chat Panel"]
-        Plan["📋 Plan Cards"]
-        Cesium["🌍 CesiumJS Viewer"]
+    subgraph Frontend["React UI"]
+        Chat["Chat / Plans / Approvals"]
+        ScenePanel["Scene Tree / Deliverables"]
+        Settings["Model + MCP Settings"]
+        Cesium["CesiumJS Viewer"]
     end
 
-    subgraph Backend["⚙️ Tauri 2 · Rust"]
-        ReAct["🔄 ReAct Loop\n(Think → Act → Observe)"]
-        MCP_Mgr["🔌 MCP Manager\n(stdio JSON-RPC)"]
+    subgraph Backend["Tauri 2 / Rust Host"]
+        Runtime["Native Agent Runtime"]
+        Providers["Provider Adapters"]
+        MCP["MCP Host Manager"]
+        Sandbox["AI Config Sandbox"]
+        State["Sessions / Scene / Trace Stores"]
     end
 
-    subgraph MCP_Servers["MCP Servers"]
-        cesium_mcp["cesium-mcp-runtime\n(72+ GIS tools)"]
-        custom_mcp["Custom MCP Servers\n(maps, data, AI, ...)"]
+    subgraph Tools["Tool Backends"]
+        CesiumMcp["cesium-mcp-runtime"]
+        CustomMcp["Custom MCP Servers"]
+        RemoteMcp["Remote MCP Endpoints"]
     end
 
-    LLM["🤖 LLM Provider\n(OpenAI / DeepSeek / Qwen / Claude / Ollama)"]
-
-    Chat -->|user message| ReAct
-    ReAct -->|streaming| LLM
-    LLM -->|tool calls| ReAct
-    ReAct -->|MCP call_tool| MCP_Mgr
-    MCP_Mgr -->|stdio| cesium_mcp
-    MCP_Mgr -->|stdio| custom_mcp
-    cesium_mcp -->|WebSocket| Cesium
-    Plan -.->|live status| Chat
+    User["User"] --> Chat
+    Chat --> Runtime
+    Runtime --> Providers
+    Runtime --> MCP
+    Runtime --> Sandbox
+    Runtime --> State
+    MCP --> CesiumMcp
+    MCP --> CustomMcp
+    MCP --> RemoteMcp
+    CesiumMcp --> Cesium
+    ScenePanel --> State
+    Settings --> MCP
 ```
 
-## � Quick Start
+## Quick start for development
+
+Requirements:
+
+- Node.js version from `.node-version`
+- Rust toolchain
+- Platform dependencies required by Tauri
 
 ```bash
 git clone https://github.com/gaopengbin/GaiaAgent.git
 cd GaiaAgent
-npm install
+npm ci
 npm run tauri:dev
 ```
 
-Configure LLM provider and MCP servers in the in-app settings dialog (⚙️).
+Useful commands:
 
-## 🤖 LLM Providers
+```bash
+npm run check:web
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+npm run sbom
+```
 
-Set `LLM_PROVIDER` in `.env`:
+## MCP example
 
-| Provider | Value | Notes |
-|----------|-------|-------|
-| Ollama | `ollama` | Local, no API key needed |
-| OpenAI | `openai` | `OPENAI_API_KEY` required |
-| OpenAI-compatible | `openai_compat` | LM Studio / vLLM / LocalAI |
-| DashScope (Qwen) | `dashscope` | Alibaba Cloud |
-| DeepSeek | `deepseek` | DeepSeek API |
-| Anthropic | `anthropic` | Claude |
-
-## 🛠️ Available Tools
-
-72+ tools across 12 toolsets via [cesium-mcp](https://github.com/gaopengbin/cesium-mcp), plus any custom MCP servers you add:
-
-| Toolset | Description |
-|---------|------------|
-| `view` | Viewport & scene management |
-| `camera` | Camera fly-to, zoom, rotation |
-| `entity` | Points, lines, polygons, labels |
-| `entity-ext` | Advanced entity operations |
-| `layer` | Imagery & terrain layers |
-| `tiles` | 3D Tiles loading & styling |
-| `heatmap` | Heatmap visualization |
-| `trajectory` | Animated trajectory playback |
-| `animation` | Timeline & clock control |
-| `interaction` | Click, pick, measure |
-| `scene` | Scene-level settings |
-| `geolocation` | Geocoding & search |
-
-> Configure tool sets and add custom MCP servers in the settings dialog.
-
-## 🔌 MCP Support
-
-GaiaAgent's Tauri edition supports the [Model Context Protocol](https://modelcontextprotocol.io/) for extensible tool integration. Add any MCP server via the built-in settings dialog:
+Add an MCP server in the app settings or let the AI prepare a reviewed MCP configuration patch.
 
 ```json
 {
@@ -121,35 +165,35 @@ GaiaAgent's Tauri edition supports the [Model Context Protocol](https://modelcon
 }
 ```
 
-MCP servers are managed through stdio JSON-RPC, with auto-start on launch and live status indicators.
+GaiaAgent validates MCP launch configuration before starting local servers. For published releases, bundled/runtime-managed tools are preferred over depending on a user's global shell environment.
 
-## 🔄 CI / Release
+## Release
 
-Automated multi-platform builds via GitHub Actions. Push a version tag to create a release:
+Releases are built by GitHub Actions from version tags:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag -a v0.3.0 -m "Release v0.3.0"
+git push origin v0.3.0
 ```
 
-Builds for: Windows x64, macOS arm64/x64, Linux x64.
+The release workflow builds Windows x64, macOS arm64, and Linux x64 packages and uploads SBOM artifacts. Tagged releases require `TAURI_SIGNING_PRIVATE_KEY` in repository Actions secrets.
 
-## 📁 Project Structure
+## Project structure
 
-```
+```text
 GaiaAgent/
-├── src/                        # React + TypeScript frontend
-│   ├── agent/                  # ReAct loop, LLM, planner, prompts
-│   ├── components/             # CesiumViewer, ChatPanel, PlanCard, ...
-│   ├── hooks/                  # useTauriAgent, useBridgeWS
-│   └── i18n/                   # Internationalization (en/zh)
-├── src-tauri/                  # Rust backend (Tauri 2)
-│   └── src/                    # lib.rs (IPC), mcp.rs (MCP manager)
-├── public/                     # Static assets (Cesium, bridge)
-├── docs/                       # Design docs & resources
+├── src/                         # React + TypeScript frontend
+│   ├── agent/                   # Timeline state, scene state, sandbox types
+│   ├── components/              # ChatPanel, ScenePanel, SettingsDialog, CesiumViewer
+│   ├── components/ai-elements/  # Chat/message/tool UI primitives
+│   └── hooks/                   # useTauriAgent and app-side orchestration
+├── src-tauri/                   # Rust backend and Tauri app
+│   └── src/                     # agent runtime, MCP host, sandbox, telemetry, IPC
+├── docs/                        # Architecture, security, testing, release docs
+├── public/                      # Static web assets and generated Cesium bridge
 └── package.json
 ```
 
-## 📄 License
+## License
 
 [MIT](LICENSE)
