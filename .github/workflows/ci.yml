@@ -25,6 +25,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - run: npm ci
+      - run: npm run prepare:runtime
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.91.1
