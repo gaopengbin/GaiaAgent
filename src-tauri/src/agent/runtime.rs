@@ -787,7 +787,7 @@ where
             message: ProviderMessage {
                 role: MessageRole::System,
                 content: format!(
-                    "{}\n\nBefore using tools, create a concise execution plan for the user's GIS task. Output 4-6 short numbered steps when the task is multi-step. For simple conversational tasks, output 1 short step. Do not call tools. Do not include JSON or markdown tables.",
+                    "{}\n\nYou are the task-complexity judge. Decide semantically whether the user's current request genuinely requires multiple dependent operations that benefit from a visible execution plan. Do not decide from keywords alone. A single tool action, direct question, conversational reply, or short sequence that can be executed immediately must return exactly NO_PLAN. If a plan is genuinely useful, output only 2-5 short numbered, executable, outcome-oriented steps. Include only operations explicitly required by the user. Never add questions, requests for missing information, optional follow-ups, analysis, reports, or other work the user did not request. Do not call tools. Do not include JSON, explanations, headings, or markdown tables.",
                     config.system_prompt
                 ),
             },
@@ -804,8 +804,8 @@ where
             model: config.model.clone(),
             turns: planning_turns,
             tools: Vec::new(),
-            max_output_tokens: config.max_output_tokens.min(700),
-            temperature: config.temperature.min(0.4),
+            max_output_tokens: config.max_output_tokens.min(300),
+            temperature: config.temperature.min(0.2),
         };
         let events = tokio::select! {
             result = self.provider.complete(request) => result?,
@@ -816,14 +816,14 @@ where
         let mut text = String::new();
         for event in events {
             match event {
-                ProviderEvent::TextDelta { text: delta }
-                | ProviderEvent::ReasoningDelta { text: delta } => {
+                ProviderEvent::TextDelta { text: delta } => {
                     let delta = sanitize_model_visible_text(&delta);
                     if !delta.is_empty() {
                         text.push_str(&delta);
                     }
                 }
                 ProviderEvent::ToolCall { .. }
+                | ProviderEvent::ReasoningDelta { .. }
                 | ProviderEvent::Usage { .. }
                 | ProviderEvent::Continuation { .. }
                 | ProviderEvent::Completed => {}
@@ -851,10 +851,17 @@ fn cancelled_error() -> ProviderError {
 }
 
 fn parse_model_plan_steps(text: &str, run_id: &str) -> Vec<RuntimeTaskPlanStep> {
-    let mut steps = text
+    if text
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("NO_PLAN"))
+    {
+        return Vec::new();
+    }
+
+    let steps = text
         .lines()
         .filter_map(clean_plan_line)
-        .take(6)
+        .take(5)
         .enumerate()
         .map(|(index, title)| RuntimeTaskPlanStep {
             id: format!("{run_id}:model-plan:step-{}", index + 1),
@@ -864,19 +871,12 @@ fn parse_model_plan_steps(text: &str, run_id: &str) -> Vec<RuntimeTaskPlanStep> 
             risk: None,
         })
         .collect::<Vec<_>>();
-    if steps.is_empty() {
-        let fallback = normalize_blank_lines(text);
-        if !fallback.is_empty() {
-            steps.push(RuntimeTaskPlanStep {
-                id: format!("{run_id}:model-plan:step-1"),
-                title: fallback.chars().take(80).collect(),
-                tool_call_id: None,
-                status: TaskStepStatus::Planned,
-                risk: None,
-            });
-        }
+
+    if steps.len() < 2 {
+        Vec::new()
+    } else {
+        steps
     }
-    steps
 }
 
 fn best_plan_step_for_tool_call<'a>(
@@ -1112,13 +1112,48 @@ fn clean_plan_line(line: &str) -> Option<String> {
     let numbered = text.find(['.', '、', ')']).filter(|index| {
         *index > 0 && text[..*index].chars().all(|ch| ch.is_ascii_digit()) && *index <= 2
     });
-    if let Some(index) = numbered {
-        text = text[index + 1..].trim();
-    }
+    let index = numbered?;
+    text = text[index + 1..].trim();
     let text = text
         .trim_matches(|ch: char| ch == '`' || ch == '"' || ch == '\'' || ch == '“' || ch == '”')
         .trim();
-    (!text.is_empty()).then(|| text.chars().take(96).collect())
+    if text.is_empty() || text.eq_ignore_ascii_case("NO_PLAN") {
+        return None;
+    }
+
+    let lower = text.to_ascii_lowercase();
+    let invalid_markers = [
+        "请问",
+        "请告诉",
+        "需要更多信息",
+        "需要补充信息",
+        "解析目标",
+        "理解需求",
+        "确认需求",
+        "执行计划",
+        "任务计划",
+        "汇总结果",
+        "具体任务",
+        "具体需求",
+        "目标区域",
+        "其他操作",
+        "如需",
+        "可以选择",
+        "是否",
+        "more information",
+        "please provide",
+        "if needed",
+        "other operations",
+    ];
+    if text.contains(['?', '？'])
+        || invalid_markers
+            .iter()
+            .any(|marker| text.contains(marker) || lower.contains(marker))
+    {
+        return None;
+    }
+
+    Some(text.chars().take(96).collect())
 }
 
 async fn wait_for_cancellation(cancelled: Arc<AtomicBool>) {
@@ -1456,7 +1491,7 @@ mod tests {
         let provider = FakeProvider(Mutex::new(VecDeque::from([
             vec![
                 ProviderEvent::TextDelta {
-                    text: "1. 解析目标\n2. 调用地图工具\n3. 汇总结果".into(),
+                    text: "1. 导入地块数据\n2. 执行缓冲分析\n3. 导出分析报告".into(),
                 },
                 ProviderEvent::Completed,
             ],
@@ -1535,6 +1570,30 @@ mod tests {
         assert!(approval_index < tool_start_index);
         assert!(approval_index < link_index);
         assert!(link_index < tool_start_index);
+    }
+
+    #[test]
+    fn model_plan_parser_skips_no_plan_and_non_executable_filler() {
+        assert!(parse_model_plan_steps("NO_PLAN", "r1").is_empty());
+        assert!(parse_model_plan_steps(
+            "任务计划：\n1. 需要更多信息来帮助您，请问目标区域？\n2. 解析目标\n3. 汇总结果\n4. 其他操作请描述具体需求。",
+            "r1"
+        )
+        .is_empty());
+        assert!(parse_model_plan_steps("1. 切换卫星底图", "r1").is_empty());
+    }
+
+    #[test]
+    fn model_plan_parser_keeps_concrete_multi_step_operations() {
+        let steps = parse_model_plan_steps(
+            "1. 导入地块 GeoJSON 数据\n2. 对地块执行缓冲分析\n3. 导出分析报告",
+            "r1",
+        );
+
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].title, "导入地块 GeoJSON 数据");
+        assert_eq!(steps[1].title, "对地块执行缓冲分析");
+        assert_eq!(steps[2].title, "导出分析报告");
     }
 
     #[test]

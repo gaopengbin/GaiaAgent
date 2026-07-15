@@ -1,7 +1,7 @@
 {
   "name": "gaia-agent",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "packageManager": "npm@11.6.2",
   "engines": {
     "node": ">=24.17.0 <25"

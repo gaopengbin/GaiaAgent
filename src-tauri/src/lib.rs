@@ -6389,141 +6389,16 @@ fn looks_like_prompt_injection(text: &str) -> bool {
 }
 
 fn should_enable_model_planning_for_goal(goal: &str) -> bool {
-    let trimmed = goal.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    let normalized = trimmed
-        .trim_matches(|ch: char| {
-            ch.is_whitespace()
-                || matches!(
-                    ch,
-                    '。' | '，' | '！' | '？' | '.' | ',' | '!' | '?' | '~' | '～' | '…'
-                )
-        })
-        .to_ascii_lowercase();
-
-    let exact_lightweight = [
-        "你好",
-        "您好",
-        "嗨",
-        "哈喽",
-        "hello",
-        "hi",
-        "hey",
-        "在吗",
-        "谢谢",
-        "谢了",
-        "thanks",
-        "thank you",
-        "ok",
-        "okay",
-        "好的",
-        "可以",
-        "嗯",
-        "嗯嗯",
-        "好",
-    ];
-    if exact_lightweight
-        .iter()
-        .any(|phrase| normalized == *phrase || trimmed == *phrase)
-    {
-        return false;
-    }
-
-    let lightweight_phrases = [
-        "你能做什么",
-        "能做什么",
-        "有什么功能",
-        "怎么用",
-        "如何使用",
-        "介绍一下你自己",
-        "你是谁",
-        "help",
-        "what can you do",
-    ];
-    if trimmed.chars().count() <= 40
-        && lightweight_phrases
-            .iter()
-            .any(|phrase| trimmed.contains(phrase) || lower.contains(phrase))
-    {
-        return false;
-    }
-
-    let informational_markers = [
-        "有什么",
-        "有哪些",
-        "哪些",
-        "什么适合",
-        "适合的",
-        "推荐",
-        "列举",
-        "列表",
-        "介绍",
-        "说明",
-        "是什么",
-        "有什么区别",
-        "优劣",
-        "优势",
-        "不足",
-        "为什么",
-        "怎么",
-        "如何",
-        "what",
-        "which",
-        "recommend",
-    ];
-    let explicit_action_markers = [
-        "帮我",
-        "请帮",
-        "给我",
-        "直接",
-        "使用 config_get",
-        "config_prepare_patch",
-        "添加一个",
-        "新增一个",
-        "配置一个",
-        "接入一个",
-        "启动",
-        "安装",
-        "id:",
-        "command:",
-        "args:",
-        "env:",
-    ];
-    if informational_markers
-        .iter()
-        .any(|marker| trimmed.contains(marker) || lower.contains(marker))
-        && !explicit_action_markers
-            .iter()
-            .any(|marker| trimmed.contains(marker) || lower.contains(marker))
-    {
-        return false;
-    }
-
-    let action_or_gis_keywords = [
-        "飞到", "定位", "添加", "标注", "绘制", "路线", "图层", "底图", "地图", "地球", "场景",
-        "显示", "隐藏", "删除", "清空", "导入", "加载", "搜索", "查询", "分析", "生成", "规划",
-        "测量", "缓冲", "叠加", "geojson", "kml", "czml", "3d", "cesium", "mcp", "tool", "map",
-        "layer", "marker", "route", "fly", "draw", "load", "delete", "import",
-    ];
-    if action_or_gis_keywords
-        .iter()
-        .any(|keyword| trimmed.contains(keyword) || lower.contains(keyword))
-    {
-        return true;
-    }
-
-    false
+    // The model is the task-complexity judge. Local code only skips an empty
+    // request; it must not infer complexity from GIS keywords or phrasing.
+    !goal.trim().is_empty()
 }
 
 fn should_enable_model_planning_for_request(
     goal: &str,
-    attachments: &[agent::ProviderAttachment],
+    _attachments: &[agent::ProviderAttachment],
 ) -> bool {
-    attachments.is_empty() && should_enable_model_planning_for_goal(goal)
+    should_enable_model_planning_for_goal(goal)
 }
 
 fn provider_turn_context_summary(index: usize, turn: &agent::ProviderTurn) -> Value {
@@ -7950,48 +7825,24 @@ mod tests {
     }
 
     #[test]
-    fn simple_conversation_goals_skip_model_planning() {
-        for goal in ["你好", "谢谢", "你能做什么？", "help"] {
-            assert!(
-                !should_enable_model_planning_for_goal(goal),
-                "expected no task plan for {goal}"
-            );
-        }
-    }
-
-    #[test]
-    fn informational_mcp_questions_skip_model_planning() {
+    fn all_non_empty_goals_request_an_ai_planning_decision() {
         for goal in [
-            "有什么适合的mcp可以添加的",
-            "有哪些适合 GIS 的 MCP 推荐？",
-            "介绍一下 WMS/WMTS 图层 MCP",
-        ] {
-            assert!(
-                !should_enable_model_planning_for_goal(goal),
-                "expected no task plan for informational question: {goal}"
-            );
-        }
-    }
-
-    #[test]
-    fn gis_action_goals_keep_model_planning_enabled() {
-        for goal in [
+            "你好",
+            "卫星底图",
             "飞到故宫",
-            "在故宫添加一个红色标注",
-            "加载这个 GeoJSON 图层",
-            "规划一条从故宫到长城的路线",
-            "帮我添加 amap-maps MCP",
-            "请使用 config_get 和 config_prepare_patch 添加 MCP",
+            "有什么适合的 MCP？",
+            "先导入数据，再分析并导出报告",
         ] {
             assert!(
                 should_enable_model_planning_for_goal(goal),
-                "expected task plan for {goal}"
+                "expected an AI planning decision for {goal}"
             );
         }
+        assert!(!should_enable_model_planning_for_goal("  "));
     }
 
     #[test]
-    fn image_messages_skip_model_planning_even_with_analysis_keyword() {
+    fn image_messages_also_request_an_ai_planning_decision() {
         let attachments = vec![agent::ProviderAttachment {
             filename: Some("screenshot.png".into()),
             media_type: "image/png".into(),
@@ -7999,7 +7850,7 @@ mod tests {
         }];
 
         assert!(should_enable_model_planning_for_goal("analyze this map"));
-        assert!(!should_enable_model_planning_for_request(
+        assert!(should_enable_model_planning_for_request(
             "analyze this map",
             &attachments
         ));
