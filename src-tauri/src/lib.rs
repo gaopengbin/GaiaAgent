@@ -6,6 +6,8 @@ mod telemetry;
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +21,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{ipc::Channel, Manager, State};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
 // ── Shared HTTP client ────────────────────────────────────────────────────────
 
@@ -1587,6 +1589,7 @@ async fn model_replanned_steps(
 
 pub struct AppState {
     pub runtime_process: Mutex<Option<Child>>,
+    pub runtime_start_lock: AsyncMutex<()>,
     pub runtime_port: u16,
     pub model_settings: Mutex<ModelSettings>,
     pub active_requests: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -2220,6 +2223,13 @@ fn app_managed_runtime_bin(name: &str) -> Option<PathBuf> {
 
 #[tauri::command]
 async fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u16, String> {
+    ensure_runtime(&app, &state).await
+}
+
+async fn ensure_runtime(app: &tauri::AppHandle, state: &AppState) -> Result<u16, String> {
+    // React StrictMode can invoke startup twice. Serialize the health check and
+    // spawn so both calls cannot launch competing runtime processes.
+    let _startup_guard = state.runtime_start_lock.lock().await;
     let port = state.runtime_port;
 
     // Check if already running
@@ -2234,8 +2244,13 @@ async fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
         }
     }
 
+    if let Some(mut stale_child) = state.runtime_process.lock().unwrap().take() {
+        let _ = stale_child.kill();
+        let _ = stale_child.wait();
+    }
+
     #[cfg(not(debug_assertions))]
-    let mut command = bundled_runtime_command(&app)?;
+    let mut command = bundled_runtime_command(app)?;
 
     #[cfg(debug_assertions)]
     let mut command = {
@@ -2277,6 +2292,11 @@ async fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
         .try_clone()
         .map_err(|error| format!("Failed to prepare runtime error log: {error}"))?;
 
+    // node.exe is a console application. Without this flag Windows creates a
+    // visible terminal whose lifetime also controls the GIS runtime process.
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+
     let mut child = command
         .env("CESIUM_WS_PORT", port.to_string())
         .env("CESIUM_TOOLSETS", "all")
@@ -2308,21 +2328,46 @@ async fn list_tools(state: State<'_, AppState>) -> Result<Vec<ToolSchema>, Strin
 
 async fn list_tools_inner(runtime_port: u16) -> Result<Vec<ToolSchema>, String> {
     let url = format!("http://127.0.0.1:{runtime_port}/api/tools");
-    let body: Value = HTTP
+    let response = HTTP
         .get(&url)
         .send()
         .await
-        .map_err(|e| e.to_string())?
-        .json()
+        .map_err(|error| format!("failed to request GIS tools from {url}: {error}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
         .await
-        .map_err(|e| e.to_string())?;
-    let tools = body["tools"]
+        .map_err(|error| format!("failed to read GIS tools response from {url}: {error}"))?;
+    if !status.is_success() {
+        let preview = String::from_utf8_lossy(&bytes);
+        return Err(format!(
+            "GIS tools endpoint returned {status}: {}",
+            preview.chars().take(240).collect::<String>()
+        ));
+    }
+    parse_runtime_tools(&bytes)
+}
+
+fn parse_runtime_tools(bytes: &[u8]) -> Result<Vec<ToolSchema>, String> {
+    let body: Value = serde_json::from_slice(bytes).map_err(|error| {
+        let preview = String::from_utf8_lossy(bytes);
+        format!(
+            "invalid GIS tools JSON: {error}; response starts with: {}",
+            preview.chars().take(240).collect::<String>()
+        )
+    })?;
+    let values = body
         .as_array()
-        .ok_or("missing tools array".to_string())?
+        .or_else(|| body.get("tools").and_then(Value::as_array))
+        .ok_or_else(|| "GIS tools response is missing a tools array".to_string())?;
+    values
         .iter()
-        .filter_map(|v| serde_json::from_value(v.clone()).ok())
-        .collect();
-    Ok(tools)
+        .enumerate()
+        .map(|(index, value)| {
+            serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid GIS tool at index {index}: {error}"))
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -7115,10 +7160,18 @@ fn provider_configuration(
 async fn agent_run_native(
     request: NativeAgentRunRequest,
     on_event: Channel<agent::RuntimeEvent>,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mcp_state: State<'_, mcp::McpServerManager>,
     trace_store: State<'_, telemetry::TraceStore>,
 ) -> Result<agent::RuntimeOutcome, agent::ProviderError> {
+    ensure_runtime(&app, &state)
+        .await
+        .map_err(|message| agent::ProviderError {
+            kind: agent::ProviderErrorKind::Network,
+            message: format!("unable to start trusted GIS tools: {message}"),
+            retryable: true,
+        })?;
     let settings = state.model_settings.lock().unwrap().clone();
     let mut runtime_tools = scene_tool_schemas();
     runtime_tools.extend(config_tool_schemas());
@@ -7651,6 +7704,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
             runtime_process: Mutex::new(None),
+            runtime_start_lock: AsyncMutex::new(()),
             runtime_port: std::env::var("CESIUM_WS_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())
@@ -7759,6 +7813,25 @@ mod tests {
             child_process_path(PathBuf::from(r"\\?\UNC\server\share\runtime\node.exe")),
             PathBuf::from(r"\\server\share\runtime\node.exe")
         );
+    }
+
+    #[test]
+    fn runtime_tools_parser_accepts_wrapped_and_bare_arrays() {
+        let tool = json!({
+            "name": "flyTo",
+            "description": "Fly to a location",
+            "inputSchema": { "type": "object" },
+            "_meta": { "toolset": "view" }
+        });
+        let wrapped = serde_json::to_vec(&json!({ "ok": true, "tools": [tool.clone()] })).unwrap();
+        let bare = serde_json::to_vec(&json!([tool])).unwrap();
+
+        for payload in [&wrapped, &bare] {
+            let tools = parse_runtime_tools(payload).unwrap();
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0].name, "flyTo");
+            assert_eq!(tools[0].input_schema["type"], "object");
+        }
     }
 
     fn openai_settings() -> ModelSettings {

@@ -47,7 +47,7 @@ export function App() {
     const saved = Number(window.localStorage.getItem('gaia-chat-panel-width'))
     return Number.isFinite(saved) && saved >= 320 ? saved : 380
   })
-  const { status: bridgeStatus } = useBridgeWS(bridge)
+  const { status: bridgeStatus } = useBridgeWS(bridge, agent.runtimePort)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modelSettings, setModelSettings] = useState<ModelSettings>(defaultSettings)
   const [sidePanel, setSidePanel] = useState<'assistant' | 'scene' | 'example'>('assistant')

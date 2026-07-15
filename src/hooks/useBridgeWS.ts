@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { ConnStatus } from '../types'
 
-const BRIDGE_PORT = 9102
 const BRIDGE_SESSION = 'gaiaagent'
 const RECONNECT_DELAY = 3000
 
@@ -29,18 +28,19 @@ export interface BridgeSceneSnapshotDetail {
   snapshot: unknown
 }
 
-export function useBridgeWS(bridge: unknown): { status: ConnStatus } {
+export function useBridgeWS(bridge: unknown, runtimePort: number | null): { status: ConnStatus } {
   const [status, setStatus] = useState<ConnStatus>('connecting')
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    if (!bridge) return
+    if (!bridge || runtimePort === null) return
     let disposed = false
+    setStatus('connecting')
 
     function connect() {
       if (disposed) return
-      const ws = new WebSocket(`ws://127.0.0.1:${BRIDGE_PORT}?session=${BRIDGE_SESSION}`)
+      const ws = new WebSocket(`ws://127.0.0.1:${runtimePort}?session=${BRIDGE_SESSION}`)
       wsRef.current = ws
 
       ws.onopen = () => {
@@ -158,7 +158,7 @@ export function useBridgeWS(bridge: unknown): { status: ConnStatus } {
       if (timerRef.current) clearTimeout(timerRef.current)
       wsRef.current?.close()
     }
-  }, [bridge])
+  }, [bridge, runtimePort])
 
   return { status }
 }

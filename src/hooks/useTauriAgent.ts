@@ -838,9 +838,11 @@ async function replaySceneOnBridge(scene: SceneState) {
       latitude: scene.camera.lat,
       longitude: scene.camera.lon,
       height: scene.camera.height,
-      heading: scene.camera.heading,
-      pitch: scene.camera.pitch,
-      roll: scene.camera.roll,
+      heading: scene.camera.heading ?? 0,
+      // Older persisted scenes only stored lon/lat/height. The bridge defaults
+      // a missing pitch to -45°, which points into space at global-view heights.
+      pitch: scene.camera.pitch ?? -90,
+      roll: scene.camera.roll ?? 0,
       absolute: true,
     })
   }
@@ -913,6 +915,7 @@ export function useTauriAgent() {
   const [timeline, setTimeline] = useState(() => loadTimeline(sessions[0]?.id ?? 'default'))
   const [status, setStatus] = useState<ConnStatus>('connecting')
   const [statusText, setStatusText] = useState('正在启动 Cesium 运行时…')
+  const [runtimePort, setRuntimePort] = useState<number | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const [pendingDeliverablesImport, setPendingDeliverablesImport] =
     useState<PendingDeliverablesImportPreview | null>(null)
@@ -1275,8 +1278,9 @@ export function useTauriAgent() {
         settingsRef.current = { ...settings, agentRuntime: 'native' }
 
         console.log('[GaiaAgent] Starting controlled Cesium bridge runtime')
-        await invoke('start_runtime')
+        const port = await invoke<number>('start_runtime')
         if (!mounted) return
+        setRuntimePort(port)
         toolsRef.current = await invoke<ToolSchema[]>('list_tools')
         if (!mounted) return
 
@@ -1323,6 +1327,7 @@ export function useTauriAgent() {
         }
       } catch (error) {
         if (!mounted) return
+        setRuntimePort(null)
         setStatus('error')
         setStatusText(startupErrorMessage(error))
       }
@@ -2984,6 +2989,7 @@ export function useTauriAgent() {
     timeline,
     sessions,
     currentSessionId,
+    runtimePort,
     status,
     statusText,
     isBusy,
