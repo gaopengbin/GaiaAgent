@@ -85,6 +85,7 @@ pub struct RuntimeConfig {
     pub max_output_tokens: u32,
     pub temperature: f32,
     pub user_attachments: Vec<ProviderAttachment>,
+    pub user_attachment_handles: Vec<String>,
     pub tool_timeout: Duration,
     pub enable_model_planning: bool,
     pub require_plan_approval: bool,
@@ -109,10 +110,36 @@ fn image_base64_payload(data_url: &str) -> Option<&str> {
     data_url.split_once(',').map(|(_, data)| data)
 }
 
+fn attachment_tool_context(
+    attachments: &[ProviderAttachment],
+    attachment_handles: &[String],
+) -> String {
+    let handles = attachments
+        .iter()
+        .enumerate()
+        .map(|(index, attachment)| {
+            let handle = attachment_handles
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("attachment://unavailable");
+            let name = attachment
+                .filename
+                .as_deref()
+                .unwrap_or("unnamed attachment");
+            format!("{handle} ({name}, {})", attachment.media_type)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{handles}. These are local GaiaAgent attachment handles. When a GIS tool such as addBillboard or loadCzml needs one of these images, pass its attachment:// handle exactly in the image field or nested CZML image URI. GaiaAgent resolves the handle locally; do not ask the user for a public URL."
+    )
+}
+
 fn user_turns_for_provider(
     provider: &str,
     goal: &str,
     attachments: &[ProviderAttachment],
+    attachment_handles: &[String],
 ) -> Vec<ProviderTurn> {
     if attachments.is_empty() {
         return vec![ProviderTurn::Message {
@@ -123,9 +150,15 @@ fn user_turns_for_provider(
         }];
     }
 
+    let goal_with_attachment_context = format!(
+        "{goal}\n\n[Local attachment tool context: {}]",
+        attachment_tool_context(attachments, attachment_handles)
+    );
+
     match provider {
         "openai" => {
-            let mut content = vec![json!({"type": "input_text", "text": goal})];
+            let mut content =
+                vec![json!({"type": "input_text", "text": goal_with_attachment_context})];
             content.extend(
                 attachments
                     .iter()
@@ -146,7 +179,8 @@ fn user_turns_for_provider(
             }]
         }
         "anthropic" => {
-            let mut content = vec![json!({"type": "text", "text": goal})];
+            let mut content =
+                vec![json!({"type": "text", "text": goal_with_attachment_context})];
             content.extend(
                 attachments
                     .iter()
@@ -175,7 +209,7 @@ fn user_turns_for_provider(
             message: ProviderMessage {
                 role: MessageRole::User,
                 content: format!(
-                    "{goal}\n\n[Attached images: {}. This provider does not support image payloads in GaiaAgent yet.]",
+                    "{goal_with_attachment_context}\n\n[Attached images: {}. This provider does not support image payloads in GaiaAgent yet.]",
                     attachments
                         .iter()
                         .filter_map(|attachment| attachment.filename.as_deref())
@@ -498,6 +532,7 @@ where
             self.provider.name(),
             &goal,
             &config.user_attachments,
+            &config.user_attachment_handles,
         ));
         let mut answer = String::new();
 
@@ -787,7 +822,7 @@ where
             message: ProviderMessage {
                 role: MessageRole::System,
                 content: format!(
-                    "{}\n\nYou are the task-complexity judge. Decide semantically whether the user's current request genuinely requires multiple dependent operations that benefit from a visible execution plan. Do not decide from keywords alone. A single tool action, direct question, conversational reply, or short sequence that can be executed immediately must return exactly NO_PLAN. If a plan is genuinely useful, output only 2-5 short numbered, executable, outcome-oriented steps. Include only operations explicitly required by the user. Never add questions, requests for missing information, optional follow-ups, analysis, reports, or other work the user did not request. Do not call tools. Do not include JSON, explanations, headings, or markdown tables.",
+                    "{}\n\nYou are the task-complexity judge. Decide semantically whether the user's current request genuinely requires multiple dependent user-visible outcomes that benefit from a visible execution plan. Do not decide from keywords alone. A single tool action, direct question, conversational reply, or short sequence that can be executed immediately must return exactly NO_PLAN. Internal implementation mechanics are not plan steps: for example, drawing or locating one geographic object is NO_PLAN even if the agent must search, geocode, fetch data, render, and move the camera. A list of candidate options is also NO_PLAN unless the user asked to carry out several of them. If a plan is genuinely useful, output only 2-5 short numbered, executable, outcome-oriented steps. Include only operations explicitly required by the user. Never add questions, requests for missing information, optional follow-ups, analysis, reports, or other work the user did not request. Do not call tools. Do not include JSON, explanations, headings, or markdown tables.",
                     config.system_prompt
                 ),
             },
@@ -1285,12 +1320,21 @@ mod tests {
                 media_type: "image/png".into(),
                 data_url: "data:application/octet-stream;base64,AAAA".into(),
             }],
+            &["attachment://run-1-0".into()],
         );
 
         let ProviderTurn::Opaque { provider, items } = &turns[0] else {
             panic!("expected opaque openai turn");
         };
         assert_eq!(provider, "openai");
+        assert!(items[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("attachment://run-1-0"));
+        assert!(!items[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("data:application/octet-stream"));
         assert_eq!(items[0]["content"][1]["type"], "input_image");
         assert_eq!(
             items[0]["content"][1]["image_url"],
@@ -1308,12 +1352,17 @@ mod tests {
                 media_type: "image/png".into(),
                 data_url: "data:application/octet-stream;base64,AAAA".into(),
             }],
+            &["attachment://run-1-0".into()],
         );
 
         let ProviderTurn::Opaque { provider, items } = &turns[0] else {
             panic!("expected opaque anthropic turn");
         };
         assert_eq!(provider, "anthropic");
+        assert!(items[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("attachment://run-1-0"));
         assert_eq!(items[0]["content"][1]["type"], "image");
         assert_eq!(items[0]["content"][1]["source"]["media_type"], "image/png");
         assert_eq!(items[0]["content"][1]["source"]["data"], "AAAA");
@@ -1329,6 +1378,7 @@ mod tests {
             max_output_tokens: 100,
             temperature: 0.0,
             user_attachments: vec![],
+            user_attachment_handles: vec![],
             tool_timeout: Duration::from_secs(1),
             enable_model_planning: false,
             require_plan_approval: false,

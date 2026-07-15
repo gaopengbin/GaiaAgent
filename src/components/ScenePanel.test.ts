@@ -4,6 +4,8 @@ import type { PolygonOverlapTriageItem } from './ScenePanel'
 import {
   attributeFilterSuggestions,
   buildScenePanelAssetDisplayModel,
+  isPlayableSceneAsset,
+  sceneAssetIconKind,
   filterPolygonOverlapTriageItems,
   filterScenePanelBusinessOutcomeItems,
   isMeasurableGeoJsonAsset,
@@ -22,6 +24,66 @@ import {
   spatialJoinCandidates,
 } from './ScenePanel'
 
+describe('isPlayableSceneAsset', () => {
+  it('recognizes CZML and animation-backed scene assets', () => {
+    expect(
+      isPlayableSceneAsset({
+        ref: 'layer:tour',
+        id: 'tour',
+        kind: 'layer',
+        type: 'CZML',
+      }),
+    ).toBe(true)
+    expect(
+      isPlayableSceneAsset({
+        ref: 'layer:roads',
+        id: 'roads',
+        kind: 'layer',
+        type: 'geojson',
+      }),
+    ).toBe(false)
+  })
+})
+
+describe('sceneAssetIconKind', () => {
+  it('distinguishes common GIS layer types', () => {
+    const layer = (type: string): SpatialAsset => ({
+      ref: `layer:${type}`,
+      id: type,
+      kind: 'layer',
+      type,
+    })
+
+    expect(sceneAssetIconKind(layer('CZML'))).toBe('animation')
+    expect(sceneAssetIconKind(layer('marker'))).toBe('point')
+    expect(sceneAssetIconKind(layer('polyline'))).toBe('route')
+    expect(sceneAssetIconKind(layer('geojson'))).toBe('area')
+    expect(sceneAssetIconKind(layer('imagery'))).toBe('imagery')
+    expect(sceneAssetIconKind(layer('terrain'))).toBe('terrain')
+    expect(sceneAssetIconKind(layer('3dtiles'))).toBe('model')
+    expect(sceneAssetIconKind(layer('unknown'))).toBe('layer')
+  })
+
+  it('uses localized and folded implementation types for logical layers', () => {
+    const logicalLayer: SpatialAsset = {
+      ref: 'layer:poi',
+      id: 'poi',
+      kind: 'layer',
+      type: 'layer',
+    }
+    const marker: SpatialAsset = {
+      ref: 'entity:poi',
+      id: 'poi',
+      kind: 'entity',
+      type: 'marker',
+    }
+
+    expect(sceneAssetIconKind(logicalLayer, [marker])).toBe('point')
+    expect(sceneAssetIconKind({ ...logicalLayer, type: '路线' })).toBe('route')
+    expect(sceneAssetIconKind({ ...logicalLayer, type: '标注' })).toBe('point')
+  })
+})
+
 function asset(
   overrides: Partial<SpatialAsset> & Pick<SpatialAsset, 'ref' | 'id' | 'kind' | 'type'>,
 ) {
@@ -33,6 +95,26 @@ function asset(
 }
 
 describe('buildScenePanelAssetDisplayModel', () => {
+  it('hides internal CZML replay assets behind their logical layer', () => {
+    const layer: SpatialAsset = {
+      ref: 'layer:tour',
+      id: 'tour',
+      kind: 'layer',
+      type: 'CZML',
+    }
+    const replayAsset: SpatialAsset = {
+      ref: 'asset:tour',
+      id: 'tour',
+      kind: 'asset',
+      type: 'vector',
+      metadata: { renderTool: 'loadCzml', renderData: [] },
+    }
+
+    const displayModel = buildScenePanelAssetDisplayModel([layer, replayAsset])
+    expect(displayModel.assets).toEqual([layer])
+    expect(displayModel.foldedAssets).toEqual([replayAsset])
+  })
+
   it('folds marker entities into their paired map layer', () => {
     const markerEntity = asset({
       ref: 'entity:marker-1',

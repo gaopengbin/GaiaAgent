@@ -3,7 +3,7 @@
   <h1>GaiaAgent</h1>
   <p><strong>AI-native GIS workspace for operating a 3D globe, MCP tools, and geospatial task workflows through conversation.</strong></p>
 
-  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.0"><img src="https://img.shields.io/badge/release-v0.3.0-blue?style=flat-square" alt="Release v0.3.0" /></a>
+  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.5"><img src="https://img.shields.io/badge/release-v0.3.5-blue?style=flat-square" alt="Release v0.3.5" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gaopengbin/GaiaAgent?style=flat-square" alt="License" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gaopengbin/GaiaAgent/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>
   <a href="https://github.com/gaopengbin/cesium-mcp"><img src="https://img.shields.io/badge/built%20on-cesium--mcp-blue?style=flat-square" alt="cesium-mcp" /></a>
@@ -29,13 +29,21 @@ The product direction is not just “chat with a map”. GaiaAgent is becoming a
 
 ## Download
 
-Latest release: [GaiaAgent v0.3.0](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.0)
+Latest release: [GaiaAgent v0.3.5](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.5)
 
 Published artifacts include:
 
 - Windows x64: `.exe` installer and `.msi`
 - macOS Apple Silicon: `.dmg`
 - Linux x64: `.AppImage`, `.deb`, `.rpm`
+
+## Highlights in v0.3.5
+
+- **Reliable conversation-scene binding**: switching or refreshing a conversation restores its basemap, camera, CZML/KML/GeoJSON layers, and replayable scene content in a deterministic order.
+- **Session-persistent image assets**: pasted images receive stable local attachment handles, remain usable across later turns and app restarts, and can be referenced directly by Billboard and nested CZML image fields without public hosting.
+- **Cleaner GIS scene tree**: implementation-only helper assets are folded away, icons distinguish points, routes, areas, imagery, terrain, models, and animations, and playable layers expose play, pause, reset, and speed controls.
+- **More reliable agent lifecycle**: failed or cancelled runs settle pending tool cards, token-budget failures stop cleanly, and simple tasks are no longer forced into unnecessary visible plans.
+- **Desktop/runtime fixes**: bundled GIS tools, CC Switch/provider routing, Tianditu credentials, basemap persistence, and Windows production startup behavior are more robust.
 
 ## Highlights in v0.3.0
 
@@ -172,8 +180,8 @@ GaiaAgent validates MCP launch configuration before starting local servers. For 
 Releases are built by GitHub Actions from version tags:
 
 ```bash
-git tag -a v0.3.0 -m "Release v0.3.0"
-git push origin v0.3.0
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
 The release workflow builds Windows x64, macOS arm64, and Linux x64 packages and uploads SBOM artifacts. Tagged releases require `TAURI_SIGNING_PRIVATE_KEY` in repository Actions secrets.

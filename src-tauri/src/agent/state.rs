@@ -130,17 +130,20 @@ impl AgentRun {
                 self.phase = RunPhase::Thinking;
             }
             RunAction::RecordUsage(usage) => {
-                let total = self
-                    .usage
-                    .total_tokens()
-                    .saturating_add(usage.total_tokens());
+                // Provider input usage is the size of the complete context sent for
+                // that round. Adding it on every tool round double-counts the same
+                // history and can stop an otherwise safe run just because several
+                // tools were called. Treat the input side as a context high-water
+                // mark while keeping newly generated output cumulative.
+                let next_input_tokens = self.usage.input_tokens.max(usage.input_tokens);
+                let next_output_tokens =
+                    self.usage.output_tokens.saturating_add(usage.output_tokens);
+                let total = next_input_tokens.saturating_add(next_output_tokens);
                 if total > self.budget.max_total_tokens {
                     return Err(TransitionError::TokenBudgetExceeded);
                 }
-                self.usage.input_tokens =
-                    self.usage.input_tokens.saturating_add(usage.input_tokens);
-                self.usage.output_tokens =
-                    self.usage.output_tokens.saturating_add(usage.output_tokens);
+                self.usage.input_tokens = next_input_tokens;
+                self.usage.output_tokens = next_output_tokens;
             }
             RunAction::Complete => self.phase = RunPhase::Completed,
             RunAction::Cancel => self.phase = RunPhase::Cancelled,
@@ -215,6 +218,31 @@ mod tests {
             })),
             Err(TransitionError::TokenBudgetExceeded)
         );
+    }
+
+    #[test]
+    fn repeated_rounds_do_not_double_count_shared_input_context() {
+        let budget = RunBudget {
+            max_rounds: 8,
+            max_tool_calls: 24,
+            max_total_tokens: 12,
+        };
+        let mut run = AgentRun::new("run-1", "goal", budget);
+
+        run.apply(RunAction::RecordUsage(ProviderUsage {
+            input_tokens: 8,
+            output_tokens: 1,
+        }))
+        .unwrap();
+        run.apply(RunAction::RecordUsage(ProviderUsage {
+            input_tokens: 9,
+            output_tokens: 1,
+        }))
+        .unwrap();
+
+        assert_eq!(run.usage.input_tokens, 9);
+        assert_eq!(run.usage.output_tokens, 2);
+        assert_eq!(run.usage.total_tokens(), 11);
     }
 
     #[test]

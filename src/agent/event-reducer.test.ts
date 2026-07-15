@@ -113,6 +113,10 @@ describe('agentTimelineReducer', () => {
         text: '截图成功',
       }),
       createAgentEvent(runId, {
+        type: 'tool.requested',
+        call: { id: 'pending-tool', name: 'screenshot', arguments: {}, risk: 'read' },
+      }),
+      createAgentEvent(runId, {
         type: 'run.failed',
         error: {
           code: 'native_runtime_failed',
@@ -126,6 +130,16 @@ describe('agentTimelineReducer', () => {
     expect(run.status).toBe('failed')
     expect(run.reasoning?.status).toBe('done')
     expect(run.messages[0]).toMatchObject({ text: '截图成功', streaming: false })
+    expect(run.tools[0]).toMatchObject({
+      status: 'failed',
+      error: { code: 'native_runtime_failed' },
+    })
+
+    const restored = normalizeAgentTimelineState(state)
+    expect(restored.runs[runId].tools[0]).toMatchObject({
+      status: 'failed',
+      error: { code: 'native_runtime_failed' },
+    })
   })
 
   it('prefers explicit task plans and syncs later tool status into matching steps', () => {

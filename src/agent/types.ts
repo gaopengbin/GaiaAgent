@@ -70,6 +70,7 @@ export interface CameraState {
 /** 完整场景状态 */
 export interface SceneState {
   revision: number
+  basemap?: string | null
   camera: CameraState | null
   layers: SceneLayer[]
   labels: SceneLabel[]

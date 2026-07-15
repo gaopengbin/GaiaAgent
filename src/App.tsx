@@ -316,6 +316,7 @@ export function App() {
                   onImportGeoJson={agent.importGeoJsonFile}
                   onImportCsv={agent.importCsvFile}
                   onDelete={agent.deleteSceneObject}
+                  onPlaybackControl={agent.controlScenePlayback}
                   taskLinks={sceneTaskLinks}
                   onOpenTaskStep={handleOpenTaskStep}
                 />

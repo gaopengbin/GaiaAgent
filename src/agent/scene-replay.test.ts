@@ -277,4 +277,34 @@ describe('scene replay commands', () => {
       },
     ])
   })
+
+  it('replays persisted CZML data with its animation clock', () => {
+    const czml = [
+      { id: 'document', version: '1.0', clock: { interval: '2026-01-01/2026-01-02' } },
+      { id: 'tour-guide', position: { cartographicDegrees: [116.4, 39.9, 0] } },
+    ]
+    const commands = buildSceneReplayCommands({
+      revision: 1,
+      camera: null,
+      layers: [],
+      labels: [],
+      assets: {
+        'asset:tour': {
+          ref: 'asset:tour',
+          id: 'tour',
+          kind: 'asset',
+          type: 'vector',
+          name: 'Dynamic tour',
+          metadata: { renderTool: 'loadCzml', renderData: czml },
+        },
+      },
+    })
+
+    expect(commands).toHaveLength(1)
+    expect(commands[0]).toMatchObject({
+      method: 'loadCzml',
+      sourceRef: 'asset:tour',
+      params: { id: 'tour', name: 'Dynamic tour', data: czml },
+    })
+  })
 })

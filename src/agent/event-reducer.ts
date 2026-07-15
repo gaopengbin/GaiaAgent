@@ -328,9 +328,15 @@ function normalizeRun(value: unknown): AgentRunView | undefined {
     error: normalizeAgentError(value.error),
     scenePatches: Array.isArray(value.scenePatches) ? value.scenePatches.filter(isRecord) : [],
   }
+  const settledRun =
+    status === 'failed'
+      ? finishUnsettledTools(run, 'failed', run.error)
+      : status === 'cancelled'
+        ? finishUnsettledTools(run, 'cancelled')
+        : run
   return withToolSyncedPlan({
-    ...run,
-    plan: normalizeTaskPlan(value.plan, run),
+    ...settledRun,
+    plan: normalizeTaskPlan(value.plan, settledRun),
   })
 }
 
@@ -375,6 +381,21 @@ function stopRunStreaming(run: AgentRunView): AgentRunView {
       message.streaming ? { ...message, streaming: false } : message,
     ),
     reasoning: run.reasoning ? { ...run.reasoning, status: 'done' } : undefined,
+  }
+}
+
+function finishUnsettledTools(
+  run: AgentRunView,
+  status: 'failed' | 'cancelled',
+  error?: AgentError,
+): AgentRunView {
+  return {
+    ...run,
+    tools: run.tools.map((tool) =>
+      ['requested', 'awaiting-approval', 'running'].includes(tool.status)
+        ? { ...tool, status, error: status === 'failed' ? error : tool.error }
+        : tool,
+    ),
   }
 }
 
@@ -1007,7 +1028,7 @@ export function agentTimelineReducer(
         event.runId,
         (run) =>
           withToolSyncedPlan({
-            ...stopRunStreaming(run),
+            ...finishUnsettledTools(stopRunStreaming(run), 'cancelled'),
             status: 'cancelled',
             completedAt: event.timestamp,
             summary: event.reason,
@@ -1020,7 +1041,7 @@ export function agentTimelineReducer(
         event.runId,
         (run) =>
           withToolSyncedPlan({
-            ...stopRunStreaming(run),
+            ...finishUnsettledTools(stopRunStreaming(run), 'failed', event.error),
             status: 'failed',
             completedAt: event.timestamp,
             error: event.error,

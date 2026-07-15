@@ -1,6 +1,6 @@
 [package]
 name = "gaia-agent"
-version = "0.3.4"
+version = "0.3.5"
 description = "GaiaAgent — AI-Powered 3D GIS Assistant (Tauri)"
 authors = []
 license = ""

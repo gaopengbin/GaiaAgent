@@ -1,25 +1,33 @@
 import { useMemo, useState } from 'react'
 import {
+  Box,
   ChevronDown,
   ChevronRight,
+  CirclePlay,
   Copy,
   Crosshair,
   Download,
   Eye,
   EyeOff,
   Info,
+  Image,
   Layers,
   Lock,
+  Map as MapIcon,
   MapPin,
   MoreHorizontal,
+  Mountain,
   PackageCheck,
+  Pause,
   Pencil,
+  Play,
   RefreshCcw,
+  Route,
+  RotateCcw,
   Search,
   Trash2,
   Unlock,
   Upload,
-  Waypoints,
 } from 'lucide-react'
 import type { SceneState, SpatialAsset } from '../agent'
 import {
@@ -62,6 +70,11 @@ interface ScenePanelProps {
   onVisibilityChange: (asset: SpatialAsset, visible: boolean) => Promise<void> | void
   onLockChange: (asset: SpatialAsset, locked: boolean) => Promise<void> | void
   onDelete: (asset: SpatialAsset) => Promise<void> | void
+  onPlaybackControl: (
+    asset: SpatialAsset,
+    action: 'play' | 'pause' | 'reset' | 'speed',
+    multiplier?: number,
+  ) => Promise<void> | void
   onAddAssetToMap: (asset: SpatialAsset) => Promise<void> | void
   onCreateBuffer: (asset: SpatialAsset, distanceMeters?: number) => Promise<void> | void
   onCreateNearest: (source: SpatialAsset, target: SpatialAsset) => Promise<void> | void
@@ -98,6 +111,19 @@ interface ScenePanelProps {
 
 type ScenePanelGroupMode = 'kind' | 'source'
 type ScenePanelSortMode = 'default' | 'name' | 'kind' | 'recent'
+
+const PLAYABLE_SCENE_ASSET_TYPES = new Set(['animation', 'czml', 'flight', 'trajectory'])
+
+export function isPlayableSceneAsset(asset: SpatialAsset) {
+  const type = asset.type.trim().toLowerCase()
+  return (
+    PLAYABLE_SCENE_ASSET_TYPES.has(type) ||
+    asset.metadata?.playable === true ||
+    asset.metadata?.renderTool === 'loadCzml' ||
+    asset.metadata?.renderTool === 'createAnimation' ||
+    asset.metadata?.renderTool === 'playTrajectory'
+  )
+}
 
 function assetKindLabel(asset: SpatialAsset) {
   if (asset.kind === 'asset') return '数据资产'
@@ -136,13 +162,62 @@ function scenePanelGroupLabel(asset: SpatialAsset, mode: ScenePanelGroupMode) {
   return assetGroupLabel(asset)
 }
 
-function assetIcon(asset: SpatialAsset) {
-  if (asset.kind === 'asset') return <Info className="size-3.5" aria-hidden="true" />
-  if (asset.kind === 'layer') return <Layers className="size-3.5" aria-hidden="true" />
-  if (asset.type === 'polyline' || asset.type === 'flight') {
-    return <Waypoints className="size-3.5" aria-hidden="true" />
+export type SceneAssetIconKind =
+  'animation' | 'area' | 'data' | 'imagery' | 'layer' | 'model' | 'point' | 'route' | 'terrain'
+
+export function sceneAssetIconKind(
+  asset: SpatialAsset,
+  implementationAssets: SpatialAsset[] = [],
+): SceneAssetIconKind {
+  if (asset.kind === 'asset') return 'data'
+  const types = [asset, ...implementationAssets].map((candidate) =>
+    candidate.type.trim().toLowerCase(),
+  )
+  const hasType = (candidates: string[]) => types.some((type) => candidates.includes(type))
+  const renderTool = String(asset.metadata?.renderTool ?? '').toLowerCase()
+  if (
+    hasType(['animation', 'czml', 'flight', 'trajectory', '动画', '轨迹', '时序']) ||
+    ['createanimation', 'loadczml', 'playtrajectory'].includes(renderTool)
+  ) {
+    return 'animation'
   }
-  return <MapPin className="size-3.5" aria-hidden="true" />
+  if (hasType(['marker', 'point', 'billboard', 'label', '标注', '标注点', '点', '点位'])) {
+    return 'point'
+  }
+  if (hasType(['polyline', 'route', 'corridor', 'wall', '路线', '折线', '路径'])) return 'route'
+  if (hasType(['polygon', 'rectangle', 'ellipse', 'geojson', 'kml', '区域', '面'])) return 'area'
+  if (hasType(['imagery', 'wms', 'wmts', 'xyz', 'tiles', 'satellite', '影像', '底图'])) {
+    return 'imagery'
+  }
+  if (hasType(['terrain', 'dem', 'heightmap', '地形'])) return 'terrain'
+  if (hasType(['model', '3dtiles', '3d-tiles', 'tileset', 'box', 'cylinder', '模型', '三维'])) {
+    return 'model'
+  }
+  return asset.kind === 'layer' ? 'layer' : 'point'
+}
+
+function assetIcon(asset: SpatialAsset, implementationAssets: SpatialAsset[] = []) {
+  const className = 'size-3.5'
+  switch (sceneAssetIconKind(asset, implementationAssets)) {
+    case 'animation':
+      return <CirclePlay className={className} aria-hidden="true" />
+    case 'area':
+      return <MapIcon className={className} aria-hidden="true" />
+    case 'data':
+      return <Info className={className} aria-hidden="true" />
+    case 'imagery':
+      return <Image className={className} aria-hidden="true" />
+    case 'model':
+      return <Box className={className} aria-hidden="true" />
+    case 'point':
+      return <MapPin className={className} aria-hidden="true" />
+    case 'route':
+      return <Route className={className} aria-hidden="true" />
+    case 'terrain':
+      return <Mountain className={className} aria-hidden="true" />
+    default:
+      return <Layers className={className} aria-hidden="true" />
+  }
 }
 
 function sourceLabel(asset: SpatialAsset) {
@@ -255,6 +330,15 @@ function layerBelongsToEntity(layer: SpatialAsset, entity: SpatialAsset) {
 export function buildScenePanelAssetDisplayModel(
   assets: SpatialAsset[],
 ): ScenePanelAssetDisplayModel {
+  const internalReplayRefs = new Set(
+    assets
+      .filter(
+        (asset) =>
+          asset.kind === 'asset' &&
+          ['loadCzml', 'loadKml'].includes(String(asset.metadata?.renderTool ?? '')),
+      )
+      .map((asset) => asset.ref),
+  )
   const layers = assets.filter((asset) => asset.kind === 'layer')
   const foldedRefs = new Set<string>()
   const foldedByParentRef: Record<string, SpatialAsset[]> = {}
@@ -270,8 +354,12 @@ export function buildScenePanelAssetDisplayModel(
   }
 
   return {
-    assets: assets.filter((asset) => !foldedRefs.has(asset.ref)),
-    foldedAssets: assets.filter((asset) => foldedRefs.has(asset.ref)),
+    assets: assets.filter(
+      (asset) => !foldedRefs.has(asset.ref) && !internalReplayRefs.has(asset.ref),
+    ),
+    foldedAssets: assets.filter(
+      (asset) => foldedRefs.has(asset.ref) || internalReplayRefs.has(asset.ref),
+    ),
     foldedByParentRef,
   }
 }
@@ -765,6 +853,7 @@ export function ScenePanel({
   onVisibilityChange,
   onLockChange,
   onDelete,
+  onPlaybackControl,
   onAddAssetToMap,
   onCreateBuffer,
   onMeasureAsset,
@@ -785,6 +874,7 @@ export function ScenePanel({
   const [query, setQuery] = useState('')
   const [groupMode, setGroupMode] = useState<ScenePanelGroupMode>('kind')
   const [sortMode, setSortMode] = useState<ScenePanelSortMode>('default')
+  const [playbackSpeed, setPlaybackSpeed] = useState(1)
   const [businessOutcomeFilter, setBusinessOutcomeFilter] =
     useState<ScenePanelBusinessOutcomeFilter>('all')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
@@ -808,9 +898,6 @@ export function ScenePanel({
   )
   const displayAssets = assetDisplayModel.assets
   const selectedAsset = scene.activeObjectRef ? scene.assets[scene.activeObjectRef] : undefined
-  const selectedChildren = selectedAsset
-    ? (assetDisplayModel.foldedByParentRef[selectedAsset.ref] ?? [])
-    : []
   const visibleAssets = displayAssets.filter((asset) => asset.visible !== false).length
   const layers = displayAssets.filter((asset) => asset.kind === 'layer').length
   const entities = displayAssets.length - layers
@@ -1423,7 +1510,7 @@ export function ScenePanel({
                   const visible = asset.visible !== false
                   const selected = scene.activeObjectRef === asset.ref
                   const recent = scene.recentObjectRefs?.includes(asset.ref) ?? false
-                  const foldedChildren = assetDisplayModel.foldedByParentRef[asset.ref] ?? []
+                  const implementationAssets = assetDisplayModel.foldedByParentRef[asset.ref] ?? []
                   const polygonOverlapRisk = polygonOverlapRiskOverview(asset)
                   return (
                     <article
@@ -1466,18 +1553,10 @@ export function ScenePanel({
                           )}
                         </Button>
                         <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-                          {foldedChildren.length > 0 ? (
-                            selected ? (
-                              <ChevronDown className="size-3.5" aria-hidden="true" />
-                            ) : (
-                              <ChevronRight className="size-3.5" aria-hidden="true" />
-                            )
-                          ) : (
-                            <span className="size-1 rounded-full bg-border" />
-                          )}
+                          <span className="size-1 rounded-full bg-border" />
                         </span>
                         <span className="flex size-6 shrink-0 items-center justify-center rounded bg-primary/10 text-primary">
-                          {assetIcon(asset)}
+                          {assetIcon(asset, implementationAssets)}
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-center gap-1.5">
@@ -1540,28 +1619,6 @@ export function ScenePanel({
                           <Crosshair className="size-3.5" aria-hidden="true" />
                         </Button>
                       </div>
-                      {foldedChildren.length > 0 && (
-                        <div className="ml-[4.15rem] mt-1 space-y-0.5 border-l border-border/70 pl-2">
-                          {foldedChildren.map((child) => (
-                            <button
-                              key={child.ref}
-                              type="button"
-                              className="flex w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-[10px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                              title={`${child.ref} · ${child.type}`}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                void onSelect(asset)
-                              }}
-                            >
-                              <span className="size-1 rounded-full bg-muted-foreground/50" />
-                              <span className="truncate">{child.name || child.id}</span>
-                              <span className="shrink-0 rounded border border-border px-1 py-0 text-[9px]">
-                                {child.type}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
                       <div className="absolute right-1 top-1">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -1664,7 +1721,10 @@ export function ScenePanel({
             <section className="sticky bottom-0 z-10 rounded-xl border border-border bg-card/95 p-3 shadow-[0_-10px_30px_rgb(0_0_0/0.12)] backdrop-blur">
               <div className="mb-2 flex min-w-0 items-start gap-2">
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  {assetIcon(selectedAsset)}
+                  {assetIcon(
+                    selectedAsset,
+                    assetDisplayModel.foldedByParentRef[selectedAsset.ref] ?? [],
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
@@ -1686,6 +1746,71 @@ export function ScenePanel({
                 </div>
               </div>
               <div className="mb-2 flex flex-wrap gap-1">
+                {isPlayableSceneAsset(selectedAsset) && (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      disabled={busy}
+                      onClick={() => void onPlaybackControl(selectedAsset, 'play')}
+                    >
+                      <Play className="size-3" aria-hidden="true" />
+                      播放
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      disabled={busy}
+                      onClick={() => void onPlaybackControl(selectedAsset, 'pause')}
+                    >
+                      <Pause className="size-3" aria-hidden="true" />
+                      暂停
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      disabled={busy}
+                      onClick={() => void onPlaybackControl(selectedAsset, 'reset')}
+                    >
+                      <RotateCcw className="size-3" aria-hidden="true" />
+                      回到起点
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-[11px]"
+                          disabled={busy}
+                        >
+                          {playbackSpeed}×
+                          <ChevronDown className="size-3" aria-hidden="true" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuLabel>播放速度</DropdownMenuLabel>
+                        {[0.25, 0.5, 1, 2, 4, 8].map((speed) => (
+                          <DropdownMenuItem
+                            key={speed}
+                            onSelect={() => {
+                              setPlaybackSpeed(speed)
+                              void onPlaybackControl(selectedAsset, 'speed', speed)
+                            }}
+                          >
+                            {speed}×{speed === playbackSpeed ? ' · 当前' : ''}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -1788,14 +1913,6 @@ export function ScenePanel({
                 <DetailRow label="范围" value={assetBboxLabel(selectedAsset)} mono />
                 <DetailRow label="数据" value={selectedAsset.uri ?? selectedAsset.dataRefId} mono />
                 <DetailRow label="字段" value={assetSchemaLabel(selectedAsset)} mono />
-                {selectedChildren.length > 0 && (
-                  <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
-                    <span className="text-muted-foreground">实现项</span>
-                    <span className="min-w-0 truncate text-foreground/90">
-                      {selectedChildren.map((child) => `${child.type}:${child.id}`).join(' / ')}
-                    </span>
-                  </div>
-                )}
               </div>
             </section>
           )}

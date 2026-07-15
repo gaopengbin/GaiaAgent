@@ -25,6 +25,7 @@ export interface BridgeToolErrorDetail {
 
 export interface BridgeSceneSnapshotDetail {
   callId?: string
+  basemap?: string
   snapshot: unknown
 }
 
@@ -98,7 +99,14 @@ export function useBridgeWS(bridge: unknown, runtimePort: number | null): { stat
           )
           window.dispatchEvent(
             new CustomEvent<BridgeSceneSnapshotDetail>(BRIDGE_SCENE_SNAPSHOT_EVENT, {
-              detail: { callId, snapshot },
+              detail: {
+                callId,
+                basemap:
+                  msg.method === 'setBasemap' && typeof params.basemap === 'string'
+                    ? params.basemap
+                    : undefined,
+                snapshot,
+              },
             }),
           )
           ;(window as unknown as Record<string, unknown>).__lastBridgeResult = {

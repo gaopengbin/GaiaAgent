@@ -46,6 +46,19 @@ describe('authoritative scene snapshots', () => {
     expect(applySceneSnapshot(state, { view: null, layers: [], entities: [] })).toBeNull()
   })
 
+  it('preserves the persisted basemap when applying a bridge snapshot', () => {
+    const state = createSceneState()
+    state.basemap = 'tianditu_img'
+
+    applySceneSnapshot(state, {
+      view: { latitude: 39.9, longitude: 116.4, height: 1000 },
+      layers: [],
+      entities: [],
+    })
+
+    expect(state.basemap).toBe('tianditu_img')
+  })
+
   it('preserves exported graphic properties for later scene replay', () => {
     const state = createSceneState()
 

@@ -1400,9 +1400,27 @@ export function ChatPanel({
         }}
       />
       <div className="flex h-full min-h-0 flex-col bg-background">
-        <header className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <header className="flex min-h-11 shrink-0 items-center gap-1.5 overflow-hidden border-b border-border px-3 py-2">
           <BotMessageSquare className="size-4 text-primary" aria-hidden="true" />
-          <span className="mr-auto text-xs font-semibold text-foreground">{t('chat.title')}</span>
+          <span className="shrink-0 text-xs font-semibold text-foreground">{t('chat.title')}</span>
+          <Select value={currentSessionId} disabled={isBusy} onValueChange={onSwitchSession}>
+            <SelectTrigger
+              size="sm"
+              className="h-7 min-w-[5.5rem] max-w-36 shrink border-0 bg-transparent px-1.5 text-[11px] font-normal text-muted-foreground shadow-none hover:bg-muted hover:text-foreground focus:ring-0"
+              title={t('chat.sessionHistory')}
+              aria-label={t('chat.sessionHistory')}
+            >
+              <SelectValue placeholder={t('chat.sessionHistory')} />
+            </SelectTrigger>
+            <SelectContent align="start" className="w-60">
+              {sessions.map((session) => (
+                <SelectItem key={session.id} value={session.id}>
+                  <span className="block max-w-48 truncate">{session.title}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="min-w-0 flex-1" aria-hidden="true" />
           <Select
             value={approvalMode}
             disabled={isBusy}
@@ -1436,23 +1454,6 @@ export function ChatPanel({
                   <span className="text-[10px] text-muted-foreground">尽量自动执行</span>
                 </div>
               </SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={currentSessionId} disabled={isBusy} onValueChange={onSwitchSession}>
-            <SelectTrigger
-              size="sm"
-              className="order-last h-8 min-w-0 basis-full border-border bg-secondary/80 px-2.5 text-[11px] shadow-inner shadow-black/10"
-              title={t('chat.sessionHistory')}
-              aria-label={t('chat.sessionHistory')}
-            >
-              <SelectValue placeholder={t('chat.sessionHistory')} />
-            </SelectTrigger>
-            <SelectContent align="start" className="w-[var(--radix-select-trigger-width)]">
-              {sessions.map((session) => (
-                <SelectItem key={session.id} value={session.id} className="max-w-72">
-                  <span className="block truncate">{session.title}</span>
-                </SelectItem>
-              ))}
             </SelectContent>
           </Select>
           <Button

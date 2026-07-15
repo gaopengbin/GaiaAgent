@@ -14,6 +14,8 @@ export interface SceneReplayCommand {
     | 'addRectangle'
     | 'addWall'
     | 'addCorridor'
+    | 'loadCzml'
+    | 'loadKml'
   params: Record<string, unknown>
   sourceRef: string
 }
@@ -262,15 +264,19 @@ function buildEntityReplayCommand(asset: SpatialAsset): SceneReplayCommand | nul
 
 function buildAssetReplayCommand(asset: SpatialAsset): SceneReplayCommand | null {
   const metadata = record(asset.metadata)
-  if (metadata?.renderTool !== 'addGeoJsonLayer' || !metadata.renderData) return null
-  const { reRenderedAt: _reRenderedAt, ...replayMetadata } = metadata
+  const renderTool = metadata?.renderTool
+  if (!['addGeoJsonLayer', 'loadCzml', 'loadKml'].includes(String(renderTool))) return null
+  if (!metadata?.renderData && !asset.uri && !asset.dataRefId) return null
+  const { reRenderedAt: _reRenderedAt, ...replayMetadata } = metadata ?? {}
+  const sourceUrl = asset.uri ?? asset.dataRefId
   return {
-    method: 'addGeoJsonLayer',
+    method: renderTool as 'addGeoJsonLayer' | 'loadCzml' | 'loadKml',
     sourceRef: asset.ref,
     params: {
       id: asset.id,
       name: labelFor(asset),
-      data: metadata.renderData,
+      data: metadata?.renderData,
+      ...(renderTool === 'addGeoJsonLayer' ? {} : { url: sourceUrl }),
       dataRefId: asset.uri ?? asset.dataRefId ?? asset.id,
       source: asset.source ?? 'import',
       locked: asset.locked ?? true,
