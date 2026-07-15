@@ -4,7 +4,9 @@ mod mcp;
 mod telemetry;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -2102,29 +2104,98 @@ fn execute_config_tool(name: String, params: Value) -> Result<Value, String> {
 
 // ── cesium-mcp-runtime management ────────────────────────────────────────────
 
-async fn wait_for_runtime(port: u16) -> Result<()> {
+async fn wait_for_runtime(port: u16, child: &mut Child, log_path: &Path) -> Result<()> {
     let url = format!("http://127.0.0.1:{}/api/status", port);
-    for _ in 0..30 {
+    for _ in 0..50 {
         if let Ok(resp) = HTTP.get(&url).send().await {
             if resp.status().is_success() {
                 return Ok(());
             }
         }
+        if let Some(status) = child.try_wait()? {
+            anyhow::bail!(
+                "cesium-mcp-runtime exited with {status} before opening port {port}. Log: {}",
+                log_path.display()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
-    anyhow::bail!("cesium-mcp-runtime did not start on port {}", port)
+    anyhow::bail!(
+        "cesium-mcp-runtime did not start on port {port}. Log: {}",
+        log_path.display()
+    )
+}
+
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn bundled_node_relative_path() -> PathBuf {
+    PathBuf::from("runtime/bin/node.exe")
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "windows")))]
+fn bundled_node_relative_path() -> PathBuf {
+    PathBuf::from("runtime/bin/node")
+}
+
+#[cfg(not(debug_assertions))]
+fn bundled_runtime_cli_relative_path() -> PathBuf {
+    PathBuf::from("runtime/node_modules/cesium-mcp-runtime/dist/cli.js")
 }
 
 #[cfg(target_os = "windows")]
+fn child_process_path(path: PathBuf) -> PathBuf {
+    let value = path.to_string_lossy();
+    if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    if let Some(absolute) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(absolute);
+    }
+    path
+}
+
+#[cfg(not(target_os = "windows"))]
+fn child_process_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(not(debug_assertions))]
+fn bundled_runtime_command(app: &tauri::AppHandle) -> Result<Command, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Failed to resolve application resources: {error}"))?;
+    let node = child_process_path(resource_dir.join(bundled_node_relative_path()));
+    let cli = child_process_path(resource_dir.join(bundled_runtime_cli_relative_path()));
+    if !node.is_file() || !cli.is_file() {
+        return Err(format!(
+            "Bundled cesium-mcp-runtime is incomplete (node: {}, cli: {})",
+            node.display(),
+            cli.display()
+        ));
+    }
+    let mut command = Command::new(node);
+    command.arg(cli);
+    Ok(command)
+}
+
+fn runtime_log_path() -> PathBuf {
+    let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("GaiaAgent")
+        .join("logs")
+        .join("cesium-mcp-runtime.log")
+}
+
+#[cfg(all(debug_assertions, target_os = "windows"))]
 fn runtime_command_extensions() -> &'static [&'static str] {
     &[".cmd", ".exe", ".bat", ".com", ""]
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(debug_assertions, not(target_os = "windows")))]
 fn runtime_command_extensions() -> &'static [&'static str] {
     &[""]
 }
 
+#[cfg(debug_assertions)]
 fn app_managed_runtime_bin(name: &str) -> Option<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
@@ -2148,7 +2219,7 @@ fn app_managed_runtime_bin(name: &str) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-async fn start_runtime(state: State<'_, AppState>) -> Result<u16, String> {
+async fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u16, String> {
     let port = state.runtime_port;
 
     // Check if already running
@@ -2163,37 +2234,65 @@ async fn start_runtime(state: State<'_, AppState>) -> Result<u16, String> {
         }
     }
 
-    let mut command = if let Some(program) = app_managed_runtime_bin("cesium-mcp-runtime") {
-        Command::new(program)
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            let mut command = Command::new("cmd");
-            command.args(["/C", "npx", "--no-install", "cesium-mcp-runtime"]);
-            command
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let mut command = Command::new("npx");
-            command.args(["--no-install", "cesium-mcp-runtime"]);
-            command
+    #[cfg(not(debug_assertions))]
+    let mut command = bundled_runtime_command(&app)?;
+
+    #[cfg(debug_assertions)]
+    let mut command = {
+        let _ = &app;
+        if let Some(program) = app_managed_runtime_bin("cesium-mcp-runtime") {
+            Command::new(child_process_path(program))
+        } else {
+            #[cfg(target_os = "windows")]
+            {
+                let mut command = Command::new("cmd");
+                command.args(["/C", "npx", "--no-install", "cesium-mcp-runtime"]);
+                command
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let mut command = Command::new("npx");
+                command.args(["--no-install", "cesium-mcp-runtime"]);
+                command
+            }
         }
     };
 
-    let child = command
+    let log_path = runtime_log_path();
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create runtime log directory: {error}"))?;
+    }
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&log_path)
+        .map_err(|error| format!("Failed to open runtime log: {error}"))?;
+    let _ = writeln!(
+        log_file,
+        "Starting bundled cesium-mcp-runtime on port {port}"
+    );
+    let error_log = log_file
+        .try_clone()
+        .map_err(|error| format!("Failed to prepare runtime error log: {error}"))?;
+
+    let mut child = command
         .env("CESIUM_WS_PORT", port.to_string())
         .env("CESIUM_TOOLSETS", "all")
         .env("CESIUM_LOCALE", "zh-CN")
         .env("DEFAULT_SESSION_ID", "gaiaagent")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(error_log))
         .spawn()
         .map_err(|e| format!("Failed to spawn cesium-mcp-runtime: {e}"))?;
 
+    if let Err(error) = wait_for_runtime(port, &mut child, &log_path).await {
+        let _ = child.kill();
+        return Err(error.to_string());
+    }
     *state.runtime_process.lock().unwrap() = Some(child);
-
-    wait_for_runtime(port).await.map_err(|e| e.to_string())?;
 
     Ok(port)
 }
@@ -7625,9 +7724,18 @@ pub fn run() {
             telemetry::trace_get_events,
             telemetry::trace_export_diagnostics,
         ])
-        .on_window_event(|_win, event| {
+        .on_window_event(|win, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // runtime process is killed automatically when Child is dropped
+                if let Some(mut child) = win
+                    .state::<AppState>()
+                    .runtime_process
+                    .lock()
+                    .unwrap()
+                    .take()
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
             }
         })
         .run(tauri::generate_context!())
@@ -7639,6 +7747,19 @@ mod tests {
     use crate::agent::ApprovalGate;
 
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn child_process_paths_remove_windows_verbatim_prefixes() {
+        assert_eq!(
+            child_process_path(PathBuf::from(r"\\?\C:\GaiaAgent\runtime\node.exe")),
+            PathBuf::from(r"C:\GaiaAgent\runtime\node.exe")
+        );
+        assert_eq!(
+            child_process_path(PathBuf::from(r"\\?\UNC\server\share\runtime\node.exe")),
+            PathBuf::from(r"\\server\share\runtime\node.exe")
+        );
+    }
 
     fn openai_settings() -> ModelSettings {
         ModelSettings {

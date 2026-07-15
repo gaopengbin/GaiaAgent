@@ -29,3 +29,7 @@ public/cesium/
 
 # Bridge file (copied from node_modules by scripts/update-bridge.mjs)
 public/cesium-mcp-bridge.browser.global.js
+
+# Generated self-contained Node runtime bundled into desktop installers
+src-tauri/runtime-bundle/bin/
+src-tauri/runtime-bundle/.runtime-build.json

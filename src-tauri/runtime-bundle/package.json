@@ -1,0 +1,8 @@
+{
+  "name": "gaiaagent-runtime-bundle",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "cesium-mcp-runtime": "1.142.3"
+  }
+}

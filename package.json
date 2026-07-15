@@ -1,7 +1,7 @@
 {
   "name": "gaia-agent",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "packageManager": "npm@11.6.2",
   "engines": {
     "node": ">=24.17.0 <25"
@@ -9,13 +9,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run prepare:runtime && tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "copy-cesium": "node scripts/copy-cesium.mjs",
     "update-bridge": "node scripts/update-bridge.mjs",
+    "prepare:runtime": "node scripts/prepare-runtime-bundle.mjs",
     "postinstall": "npm run copy-cesium",
     "predev": "npm run update-bridge",
     "prebuild": "npm run update-bridge",
