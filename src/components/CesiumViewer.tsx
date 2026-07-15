@@ -14,6 +14,7 @@ type CesiumViewerInstance = ViewerInstance & {
   scene: {
     backgroundColor: unknown
     globe: { baseColor: unknown }
+    requestRender?: () => void
     skyBox?: { show?: boolean } | undefined
     skyAtmosphere?: { show?: boolean } | undefined
     sun?: { show?: boolean } | undefined
@@ -21,6 +22,7 @@ type CesiumViewerInstance = ViewerInstance & {
   }
   imageryLayers: { add: (l: unknown) => unknown; remove: (l: unknown, destroy?: boolean) => void }
   camera: { flyTo: (opts: Record<string, unknown>) => void }
+  resize: () => void
 }
 
 const DEFAULT_ION_TOKEN =
@@ -85,8 +87,14 @@ export function CesiumViewer({ onBridgeReady, ionToken, theme }: CesiumViewerPro
     if (viewer.scene.moon) viewer.scene.moon.show = false
     viewer.camera.flyTo({
       destination: C.Cartesian3.fromDegrees(104, 35, 20_000_000),
+      orientation: {
+        heading: 0,
+        pitch: -Math.PI / 2,
+        roll: 0,
+      },
       duration: 0,
     })
+    viewer.resize()
 
     try {
       const bridge = new CesiumMcpBridge.CesiumBridge(viewer) as {
@@ -133,6 +141,7 @@ export function CesiumViewer({ onBridgeReady, ionToken, theme }: CesiumViewerPro
         }),
       ),
     )
+    viewer.scene.requestRender?.()
   }, [theme, ionToken])
 
   return <div ref={containerRef} className="h-full w-full" />
