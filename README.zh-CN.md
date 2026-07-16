@@ -35,7 +35,7 @@ GaiaAgent 是一款基于 Tauri、React、Rust、CesiumJS 和 MCP 的桌面端 A
 
 - Windows x64：`.exe` 安装器和 `.msi`
 - macOS Apple Silicon：`.dmg`
-- Linux x64：`.AppImage`、`.deb`、`.rpm`
+- Linux x64：`.deb`、`.rpm`
 
 ## v0.3.6 主要更新
 

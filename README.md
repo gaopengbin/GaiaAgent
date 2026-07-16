@@ -35,7 +35,7 @@ Published artifacts include:
 
 - Windows x64: `.exe` installer and `.msi`
 - macOS Apple Silicon: `.dmg`
-- Linux x64: `.AppImage`, `.deb`, `.rpm`
+- Linux x64: `.deb`, `.rpm`
 
 ## Highlights in v0.3.6
 
