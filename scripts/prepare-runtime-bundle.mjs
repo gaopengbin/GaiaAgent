@@ -6,6 +6,19 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const appPackage = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+const tauriConfig = JSON.parse(readFileSync(join(repoRoot, 'src-tauri', 'tauri.conf.json'), 'utf8'))
+const runtimeTarget = `runtime-${appPackage.version}`
+const resourceTargets = Object.values(tauriConfig.bundle?.resources ?? {})
+if (
+  tauriConfig.version !== appPackage.version ||
+  !resourceTargets.includes(`${runtimeTarget}/bin/`) ||
+  !resourceTargets.includes(`${runtimeTarget}/node_modules/`)
+) {
+  throw new Error(
+    `Versioned runtime resources are out of sync: expected app ${appPackage.version} under ${runtimeTarget}`,
+  )
+}
 const bundleRoot = join(repoRoot, 'src-tauri', 'runtime-bundle')
 const lockPath = join(bundleRoot, 'package-lock.json')
 const markerPath = join(bundleRoot, '.runtime-build.json')

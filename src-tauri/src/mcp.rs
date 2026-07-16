@@ -619,6 +619,10 @@ fn app_runtime_roots(app: Option<&AppHandle>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(app) = app {
         if let Ok(resource_dir) = app.path().resource_dir() {
+            roots.push(resource_dir.join(crate::bundled_runtime_dir_name()));
+            // Keep the legacy location as a fallback for development builds and
+            // partially upgraded installations. New releases always prefer the
+            // versioned directory so a stale Node process cannot lock upgrades.
             roots.push(resource_dir.join("runtime"));
             roots.push(resource_dir);
         }

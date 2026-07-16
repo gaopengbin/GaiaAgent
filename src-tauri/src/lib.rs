@@ -2399,19 +2399,23 @@ async fn wait_for_runtime(port: u16, child: &mut Child, log_path: &Path) -> Resu
     )
 }
 
+pub(crate) fn bundled_runtime_dir_name() -> String {
+    format!("runtime-{}", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(all(not(debug_assertions), target_os = "windows"))]
 fn bundled_node_relative_path() -> PathBuf {
-    PathBuf::from("runtime/bin/node.exe")
+    PathBuf::from(bundled_runtime_dir_name()).join("bin/node.exe")
 }
 
 #[cfg(all(not(debug_assertions), not(target_os = "windows")))]
 fn bundled_node_relative_path() -> PathBuf {
-    PathBuf::from("runtime/bin/node")
+    PathBuf::from(bundled_runtime_dir_name()).join("bin/node")
 }
 
 #[cfg(not(debug_assertions))]
 fn bundled_runtime_cli_relative_path() -> PathBuf {
-    PathBuf::from("runtime/node_modules/cesium-mcp-runtime/dist/cli.js")
+    PathBuf::from(bundled_runtime_dir_name()).join("node_modules/cesium-mcp-runtime/dist/cli.js")
 }
 
 #[cfg(target_os = "windows")]

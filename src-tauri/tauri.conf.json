@@ -1,6 +1,6 @@
 {
   "productName": "GaiaAgent",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "identifier": "com.gaiaagent.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -44,8 +44,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "runtime-bundle/bin/": "runtime/bin/",
-      "runtime-bundle/node_modules/": "runtime/node_modules/"
+      "runtime-bundle/bin/": "runtime-0.3.9/bin/",
+      "runtime-bundle/node_modules/": "runtime-0.3.9/node_modules/"
     },
     "windows": {
       "nsis": {

@@ -3,7 +3,7 @@
   <h1>GaiaAgent（盖亚）</h1>
   <p><strong>面向三维地球、MCP 工具和地理空间任务流的 AI 原生 GIS 工作台。</strong></p>
 
-  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.8"><img src="https://img.shields.io/badge/release-v0.3.8-blue?style=flat-square" alt="Release v0.3.8" /></a>
+  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.9"><img src="https://img.shields.io/badge/release-v0.3.9-blue?style=flat-square" alt="Release v0.3.9" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gaopengbin/GaiaAgent?style=flat-square" alt="License" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gaopengbin/GaiaAgent/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>
   <a href="https://github.com/gaopengbin/cesium-mcp"><img src="https://img.shields.io/badge/基于-cesium--mcp-blue?style=flat-square" alt="cesium-mcp" /></a>
@@ -29,13 +29,18 @@ GaiaAgent 是一款基于 Tauri、React、Rust、CesiumJS 和 MCP 的桌面端 A
 
 ## 下载
 
-最新版本：[GaiaAgent v0.3.8](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.8)
+最新版本：[GaiaAgent v0.3.9](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.9)
 
 已发布产物包括：
 
 - Windows x64：`.exe` 安装器和 `.msi`
 - macOS Apple Silicon：`.dmg`
 - Linux x64：`.deb`、`.rpm`
+
+## v0.3.9 主要更新
+
+- **Windows 升级不再受文件锁阻塞**：内置 Node 运行时改为安装到带版本号的目录，旧版本遗留进程即使未退出，也不会阻止新安装器写入 `node.exe`。
+- **更可靠的安装器清理**：NSIS 在安装和卸载前关闭 GaiaAgent 整棵进程树，并等待受管运行时进程退出。
 
 ## v0.3.8 主要更新
 
