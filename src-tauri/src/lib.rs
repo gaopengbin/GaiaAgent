@@ -7472,6 +7472,107 @@ fn overlaps_builtin_web_fetch(tool_name: &str) -> bool {
     )
 }
 
+fn incomplete_run_history_turns(
+    goal: &str,
+    events: &[agent::RuntimeEvent],
+    error: &agent::ProviderError,
+) -> Vec<agent::ProviderTurn> {
+    let mut tool_names = HashMap::new();
+    let mut plan_steps = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut partial_answer = String::new();
+
+    for event in events {
+        match event {
+            agent::RuntimeEvent::Provider {
+                event: agent::ProviderEvent::TextDelta { text },
+            } => partial_answer.push_str(text),
+            agent::RuntimeEvent::TaskPlanCreated { plan } => {
+                plan_steps = plan.steps.iter().map(|step| step.title.clone()).collect();
+            }
+            agent::RuntimeEvent::ToolStarted { call } => {
+                tool_names.insert(call.id.clone(), call.name.clone());
+            }
+            agent::RuntimeEvent::ToolCompleted { call_id, output } => {
+                let name = tool_names
+                    .get(call_id)
+                    .cloned()
+                    .unwrap_or_else(|| call_id.clone());
+                outcomes.push(format!(
+                    "- completed `{name}`: {}",
+                    compact_text(output, 800)
+                ));
+            }
+            agent::RuntimeEvent::ToolFailed { call_id, error } => {
+                let name = tool_names
+                    .get(call_id)
+                    .cloned()
+                    .unwrap_or_else(|| call_id.clone());
+                outcomes.push(format!("- failed `{name}`: {}", compact_text(error, 500)));
+            }
+            _ => {}
+        }
+    }
+
+    let mut summary = vec![
+        "[GaiaAgent incomplete-run recovery context]".to_string(),
+        format!("Original task: {}", compact_text(goal, 1_000)),
+    ];
+    if !plan_steps.is_empty() {
+        summary.push(format!(
+            "Planned work: {}",
+            plan_steps
+                .iter()
+                .map(|step| compact_text(step, 180))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    if !outcomes.is_empty() {
+        summary.push(format!("Tool progress:\n{}", outcomes.join("\n")));
+    }
+    if !partial_answer.trim().is_empty() {
+        summary.push(format!(
+            "Partial assistant output: {}",
+            compact_text(&partial_answer, 1_200)
+        ));
+    }
+    summary.push(format!(
+        "Run interruption: {}",
+        compact_text(&error.message, 800)
+    ));
+    summary.push("The task was not completed. If the user asks to continue, resume this original task from the recorded progress instead of treating 'continue' as a new unrelated request.".into());
+
+    vec![
+        agent::ProviderTurn::Message {
+            message: agent::ProviderMessage {
+                role: agent::MessageRole::User,
+                content: goal.to_string(),
+            },
+        },
+        agent::ProviderTurn::Message {
+            message: agent::ProviderMessage {
+                role: agent::MessageRole::Assistant,
+                content: summary.join("\n\n"),
+            },
+        },
+    ]
+}
+
+fn compact_native_history_after_failure(
+    settings: &ModelSettings,
+    turns: Vec<agent::ProviderTurn>,
+) -> Vec<agent::ProviderTurn> {
+    let (max_turns, max_bytes) = context_limits(settings);
+    let (turns, compacted) = split_history_for_compaction_with_limits(turns, max_turns, max_bytes);
+    if compacted.is_empty() {
+        turns
+    } else {
+        let summary = summarize_compacted_turns(&compacted);
+        insert_compacted_summary(turns, &compacted, summary)
+    }
+}
+
 #[tauri::command]
 async fn agent_run_native(
     request: NativeAgentRunRequest,
@@ -7591,6 +7692,7 @@ async fn agent_run_native(
         .get(&request.session_id)
         .cloned()
         .unwrap_or_default();
+    let history_before_run = history.clone();
     let base_system_prompt = if request.system_prompt.trim().is_empty() {
         "You are GaiaAgent. Use the provided GIS tools when needed and explain the result concisely."
     } else {
@@ -7649,6 +7751,9 @@ async fn agent_run_native(
         ),
         require_plan_approval: !settings.approval_mode.eq_ignore_ascii_case("auto"),
     };
+    let goal_for_history = request.goal.clone();
+    let recovery_events = Arc::new(Mutex::new(Vec::new()));
+    let emitted_events = recovery_events.clone();
     let result = runtime
         .run(
             request.run_id.clone(),
@@ -7656,6 +7761,7 @@ async fn agent_run_native(
             config,
             cancelled,
             |event| {
+                emitted_events.lock().unwrap().push(event.clone());
                 let _ = on_event.send(event);
             },
         )
@@ -7679,6 +7785,22 @@ async fn agent_run_native(
         }
         if let Err(error) = save_native_session_to_disk(&request.session_id, &history) {
             eprintln!("Failed to persist native agent sessions: {error}");
+        }
+    } else if let Err(error) = &result {
+        let events = recovery_events.lock().unwrap().clone();
+        let mut history = history_before_run;
+        history.extend(incomplete_run_history_turns(
+            &goal_for_history,
+            &events,
+            error,
+        ));
+        let history = compact_native_history_after_failure(&settings, history);
+        {
+            let mut sessions = state.native_sessions.lock().unwrap();
+            sessions.insert(request.session_id.clone(), history.clone());
+        }
+        if let Err(error) = save_native_session_to_disk(&request.session_id, &history) {
+            eprintln!("Failed to persist incomplete native agent session: {error}");
         }
     }
     state
@@ -8208,6 +8330,56 @@ mod tests {
         assert!(overlaps_builtin_web_fetch("FETCH_MARKDOWN"));
         assert!(!overlaps_builtin_web_fetch("fetch_json"));
         assert!(!overlaps_builtin_web_fetch("fetch_youtube_transcript"));
+    }
+
+    #[test]
+    fn failed_run_history_records_goal_progress_and_resume_instruction() {
+        let events = vec![
+            agent::RuntimeEvent::TaskPlanCreated {
+                plan: agent::RuntimeTaskPlan {
+                    id: "plan-1".into(),
+                    goal: "configure MCP".into(),
+                    steps: vec![agent::RuntimeTaskPlanStep {
+                        id: "step-1".into(),
+                        title: "Read current config".into(),
+                        tool_call_id: Some("call-1".into()),
+                        status: agent::TaskStepStatus::Planned,
+                        risk: None,
+                    }],
+                },
+            },
+            agent::RuntimeEvent::ToolStarted {
+                call: agent::NativeToolCall {
+                    id: "call-1".into(),
+                    name: "config_get".into(),
+                    arguments: json!({"target": "mcp-servers"}),
+                },
+            },
+            agent::RuntimeEvent::ToolCompleted {
+                call_id: "call-1".into(),
+                output: "existing configuration loaded".into(),
+            },
+        ];
+        let error = agent::ProviderError {
+            kind: agent::ProviderErrorKind::Network,
+            message: "connection interrupted".into(),
+            retryable: true,
+        };
+
+        let turns = incomplete_run_history_turns("add server-fetch", &events, &error);
+        assert!(matches!(
+            &turns[0],
+            agent::ProviderTurn::Message { message }
+                if message.role == agent::MessageRole::User
+                    && message.content == "add server-fetch"
+        ));
+        let agent::ProviderTurn::Message { message } = &turns[1] else {
+            panic!("expected recovery assistant message");
+        };
+        assert!(message.content.contains("Read current config"));
+        assert!(message.content.contains("completed `config_get`"));
+        assert!(message.content.contains("connection interrupted"));
+        assert!(message.content.contains("asks to continue"));
     }
 
     #[test]
