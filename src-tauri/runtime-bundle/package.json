@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "dependencies": {
-    "cesium-mcp-runtime": "1.142.3"
+    "cesium-mcp-runtime": "1.142.3",
+    "npm": "11.6.2",
+    "open-websearch": "2.1.11"
   }
 }

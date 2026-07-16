@@ -240,6 +240,9 @@ pub struct McpToolBinding {
     pub tool: crate::ToolSchema,
 }
 
+pub const BUILTIN_WEB_SEARCH_SERVER_ID: &str = "__gaia_builtin_web_search";
+pub const BUILTIN_WEB_TOOL_NAMES: &[&str] = &["web_search", "web_fetch"];
+
 type SharedProcess = Arc<Mutex<McpProcess>>;
 
 pub struct McpServerManager {
@@ -247,6 +250,8 @@ pub struct McpServerManager {
     active_calls: Mutex<HashMap<String, ActiveMcpCall>>,
     pending_elicitations: PendingElicitations,
     oauth_sessions: Mutex<HashMap<String, OAuthState>>,
+    builtin_web_start: Mutex<()>,
+    builtin_web_proxy: Mutex<Option<String>>,
 }
 
 struct ActiveMcpCall {
@@ -262,6 +267,8 @@ impl McpServerManager {
             active_calls: Mutex::new(HashMap::new()),
             pending_elicitations: Arc::new(Mutex::new(HashMap::new())),
             oauth_sessions: Mutex::new(HashMap::new()),
+            builtin_web_start: Mutex::new(()),
+            builtin_web_proxy: Mutex::new(None),
         }
     }
 
@@ -310,6 +317,102 @@ impl McpServerManager {
         call_id: Option<String>,
     ) -> Result<Value, String> {
         mcp_call_tool_inner(self, server_id, tool_name, arguments, call_id).await
+    }
+
+    async fn start_stdio_process(
+        &self,
+        server_id: String,
+        display_command: &str,
+        cmd: Command,
+        app: AppHandle,
+    ) -> Result<Value, String> {
+        let old = self.servers.lock().await.remove(&server_id);
+        if let Some(old) = old {
+            close_process(old).await;
+        }
+
+        let (transport, stderr) = TokioChildProcess::builder(cmd)
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("spawn '{display_command}' failed: {error}"))?;
+
+        if let Some(stderr) = stderr {
+            let sid = server_id.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    eprintln!("[MCP:{sid}] {line}");
+                }
+            });
+        }
+
+        let client = tokio::time::timeout(
+            Duration::from_secs(30),
+            GaiaMcpClientHandler {
+                app,
+                server_id: server_id.clone(),
+                pending_elicitations: self.pending_elicitations.clone(),
+            }
+            .serve(transport),
+        )
+        .await
+        .map_err(|_| format!("MCP initialize handshake timed out for '{server_id}'"))?
+        .map_err(|error| format!("MCP initialize handshake failed for '{server_id}': {error}"))?;
+        let server_info = serde_json::to_value(client.peer_info()).unwrap_or(Value::Null);
+        self.servers.lock().await.insert(
+            server_id,
+            Arc::new(Mutex::new(McpProcess {
+                client,
+                transport: "stdio",
+                tool_count: 0,
+                connected_at_ms: now_ms(),
+            })),
+        );
+        Ok(server_info)
+    }
+
+    pub async fn ensure_builtin_web_search(
+        &self,
+        app: AppHandle,
+        proxy_url: &str,
+    ) -> Result<(), String> {
+        let _start_guard = self.builtin_web_start.lock().await;
+        let normalized_proxy = proxy_url.trim().to_string();
+        let already_running = self
+            .servers
+            .lock()
+            .await
+            .contains_key(BUILTIN_WEB_SEARCH_SERVER_ID);
+        let same_proxy = self.builtin_web_proxy.lock().await.as_deref() == Some(&normalized_proxy);
+        if already_running && same_proxy {
+            return Ok(());
+        }
+
+        let cmd = build_builtin_web_search_command(&app, &normalized_proxy).ok_or_else(|| {
+            "bundled open-websearch runtime is missing; reinstall GaiaAgent".to_string()
+        })?;
+        self.start_stdio_process(
+            BUILTIN_WEB_SEARCH_SERVER_ID.to_string(),
+            "open-websearch",
+            cmd,
+            app,
+        )
+        .await?;
+        let process = self.server(BUILTIN_WEB_SEARCH_SERVER_ID).await?;
+        let tools = process
+            .lock()
+            .await
+            .client
+            .list_all_tools()
+            .await
+            .map_err(|error| format!("built-in web tools/list failed: {error}"))?;
+        for required in BUILTIN_WEB_TOOL_NAMES {
+            if !tools.iter().any(|tool| tool.name.as_ref() == *required) {
+                return Err(format!("built-in web tool '{required}' is unavailable"));
+            }
+        }
+        *self.builtin_web_proxy.lock().await = Some(normalized_proxy);
+        Ok(())
     }
 }
 
@@ -497,33 +600,139 @@ fn common_windows_node_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn app_managed_bin_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+fn app_runtime_roots(app: Option<&AppHandle>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
     if let Some(app) = app {
         if let Ok(resource_dir) = app.path().resource_dir() {
-            dirs.push(resource_dir.join("node_modules").join(".bin"));
-            dirs.push(resource_dir.join("node").join("node_modules").join(".bin"));
-            dirs.push(
-                resource_dir
-                    .join("nodejs")
-                    .join("node_modules")
-                    .join(".bin"),
-            );
-            dirs.push(resource_dir.join("bin"));
+            roots.push(resource_dir.join("runtime"));
+            roots.push(resource_dir);
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd.join("node_modules").join(".bin"));
+        roots.push(cwd.join("src-tauri").join("runtime-bundle"));
+        roots.push(cwd.join("runtime-bundle"));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            dirs.push(exe_dir.join("node_modules").join(".bin"));
-            dirs.push(exe_dir.join("resources").join("node_modules").join(".bin"));
-            dirs.push(exe_dir.join("node").join("node_modules").join(".bin"));
-            dirs.push(exe_dir.join("nodejs").join("node_modules").join(".bin"));
+            roots.push(exe_dir.join("resources").join("runtime"));
+            roots.push(exe_dir.join("runtime"));
         }
     }
+    roots
+}
+
+fn app_managed_bin_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
+    let mut dirs = app_runtime_roots(app)
+        .into_iter()
+        .flat_map(|root| [root.join("node_modules").join(".bin"), root.join("bin")])
+        .collect::<Vec<_>>();
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd.join("node_modules").join(".bin"));
+    }
     dirs
+}
+
+fn build_builtin_web_search_command(app: &AppHandle, proxy_url: &str) -> Option<Command> {
+    let (node, entrypoint) =
+        bundled_open_websearch_invocation_from_roots(app_runtime_roots(Some(app)))?;
+    let mut command = Command::new(&node);
+    inherit_minimal_environment(&mut command);
+    command
+        .arg(entrypoint)
+        .kill_on_drop(true)
+        .env("MODE", "stdio")
+        .env("DEFAULT_SEARCH_ENGINE", "bing")
+        .env("ALLOWED_SEARCH_ENGINES", "bing,baidu,duckduckgo")
+        .env("SEARCH_MODE", "request")
+        .env("MCP_TOOL_SEARCH_NAME", "web_search")
+        .env("MCP_TOOL_FETCH_WEB_NAME", "web_fetch");
+    #[cfg(target_os = "windows")]
+    prepend_command_dir_to_path(&mut command, &node);
+    if !proxy_url.is_empty() {
+        command.env("USE_PROXY", "true").env("PROXY_URL", proxy_url);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    Some(command)
+}
+
+fn bundled_open_websearch_invocation_from_roots(
+    roots: impl IntoIterator<Item = PathBuf>,
+) -> Option<(PathBuf, PathBuf)> {
+    let node_name = if cfg!(target_os = "windows") {
+        "node.exe"
+    } else {
+        "node"
+    };
+    roots.into_iter().find_map(|root| {
+        let node = root.join("bin").join(node_name);
+        let entrypoint = root
+            .join("node_modules")
+            .join("open-websearch")
+            .join("build")
+            .join("index.js");
+        (node.is_file() && entrypoint.is_file())
+            .then(|| (child_process_path(&node), child_process_path(&entrypoint)))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn child_process_path(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    raw.strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn child_process_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+fn bundled_npm_invocation(
+    command: &str,
+    args: &[String],
+    app: Option<&AppHandle>,
+) -> Option<(PathBuf, Vec<String>)> {
+    bundled_npm_invocation_from_roots(command, args, app_runtime_roots(app))
+}
+
+fn bundled_npm_invocation_from_roots(
+    command: &str,
+    args: &[String],
+    roots: impl IntoIterator<Item = PathBuf>,
+) -> Option<(PathBuf, Vec<String>)> {
+    let cli_name = if command.eq_ignore_ascii_case("npx") {
+        "npx-cli.js"
+    } else if command.eq_ignore_ascii_case("npm") {
+        "npm-cli.js"
+    } else {
+        return None;
+    };
+    let node_name = if cfg!(target_os = "windows") {
+        "node.exe"
+    } else {
+        "node"
+    };
+    roots.into_iter().find_map(|root| {
+        let node = root.join("bin").join(node_name);
+        let cli = root
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join(cli_name);
+        if !node.is_file() || !cli.is_file() {
+            return None;
+        }
+        let mut resolved_args = Vec::with_capacity(args.len() + 1);
+        resolved_args.push(child_process_path(&cli).to_string_lossy().into_owned());
+        resolved_args.extend_from_slice(args);
+        Some((child_process_path(&node), resolved_args))
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -610,6 +819,9 @@ fn resolve_managed_mcp_command(
 ) -> Option<(PathBuf, Vec<String>)> {
     if command.eq_ignore_ascii_case("npx") || command.eq_ignore_ascii_case("npm") {
         if let Some(invocation) = local_npx_package_invocation(args, app) {
+            return Some(invocation);
+        }
+        if let Some(invocation) = bundled_npm_invocation(command, args, app) {
             return Some(invocation);
         }
     }
@@ -762,51 +974,10 @@ pub async fn mcp_start_server(
     state: State<'_, McpServerManager>,
 ) -> Result<Value, String> {
     validate_mcp_launch(&command, &args, env.as_ref())?;
-
-    let old = state.servers.lock().await.remove(&server_id);
-    if let Some(old) = old {
-        close_process(old).await;
-    }
-
     let cmd = build_mcp_command(&command, &args, env.as_ref(), Some(&app));
-    let (transport, stderr) = TokioChildProcess::builder(cmd)
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("spawn '{command}' failed: {error}"))?;
-
-    if let Some(stderr) = stderr {
-        let sid = server_id.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                eprintln!("[MCP:{sid}] {line}");
-            }
-        });
-    }
-
-    let client = tokio::time::timeout(
-        Duration::from_secs(30),
-        GaiaMcpClientHandler {
-            app,
-            server_id: server_id.clone(),
-            pending_elicitations: state.pending_elicitations.clone(),
-        }
-        .serve(transport),
-    )
-    .await
-    .map_err(|_| format!("MCP initialize handshake timed out for '{server_id}'"))?
-    .map_err(|error| format!("MCP initialize handshake failed for '{server_id}': {error}"))?;
-    let server_info = serde_json::to_value(client.peer_info()).unwrap_or(Value::Null);
-    state.servers.lock().await.insert(
-        server_id,
-        Arc::new(Mutex::new(McpProcess {
-            client,
-            transport: "stdio",
-            tool_count: 0,
-            connected_at_ms: now_ms(),
-        })),
-    );
-    Ok(server_info)
+    state
+        .start_stdio_process(server_id, &command, cmd, app)
+        .await
 }
 
 #[tauri::command]
@@ -1239,6 +1410,82 @@ mod tests {
 
         let invalid = HashMap::from([("1INVALID".into(), "value".into())]);
         assert!(validate_mcp_launch("node", &["server.js".into()], Some(&invalid)).is_err());
+    }
+
+    #[test]
+    fn bundled_npx_runs_through_the_managed_node_runtime() {
+        let root =
+            std::env::temp_dir().join(format!("gaiaagent-mcp-runtime-test-{}", std::process::id()));
+        let node_name = if cfg!(target_os = "windows") {
+            "node.exe"
+        } else {
+            "node"
+        };
+        let node = root.join("bin").join(node_name);
+        let cli = root
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npx-cli.js");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        std::fs::write(&node, []).unwrap();
+        std::fs::write(&cli, []).unwrap();
+
+        let (program, args) = bundled_npm_invocation_from_roots(
+            "npx",
+            &["-y".into(), "mcp-fetch-server".into()],
+            [root.clone()],
+        )
+        .expect("bundled npx should resolve");
+
+        assert_eq!(program, child_process_path(&node));
+        assert_eq!(args[0], child_process_path(&cli).to_string_lossy());
+        assert_eq!(&args[1..], ["-y", "mcp-fetch-server"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bundled_open_websearch_uses_the_managed_node_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "gaiaagent-web-search-runtime-test-{}",
+            std::process::id()
+        ));
+        let node_name = if cfg!(target_os = "windows") {
+            "node.exe"
+        } else {
+            "node"
+        };
+        let node = root.join("bin").join(node_name);
+        let entrypoint = root
+            .join("node_modules")
+            .join("open-websearch")
+            .join("build")
+            .join("index.js");
+        std::fs::create_dir_all(node.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+        std::fs::write(&node, []).unwrap();
+        std::fs::write(&entrypoint, []).unwrap();
+
+        let (program, script) = bundled_open_websearch_invocation_from_roots([root.clone()])
+            .expect("bundled open-websearch should resolve");
+
+        assert_eq!(program, child_process_path(&node));
+        assert_eq!(script, child_process_path(&entrypoint));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn strips_windows_verbatim_prefix_from_node_script_paths() {
+        assert_eq!(
+            child_process_path(Path::new(r"\\?\G:\runtime\npx-cli.js")),
+            PathBuf::from(r"G:\runtime\npx-cli.js")
+        );
+        assert_eq!(
+            child_process_path(Path::new(r"\\?\UNC\server\share\npx-cli.js")),
+            PathBuf::from(r"\\server\share\npx-cli.js")
+        );
     }
 
     #[test]

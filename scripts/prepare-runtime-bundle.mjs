@@ -11,6 +11,7 @@ const lockPath = join(bundleRoot, 'package-lock.json')
 const markerPath = join(bundleRoot, '.runtime-build.json')
 const nodeModulesPath = join(bundleRoot, 'node_modules')
 const runtimePackagePath = join(nodeModulesPath, 'cesium-mcp-runtime', 'package.json')
+const webSearchPackagePath = join(nodeModulesPath, 'open-websearch', 'package.json')
 const binDir = join(bundleRoot, 'bin')
 const nodeFilename = process.platform === 'win32' ? 'node.exe' : 'node'
 const bundledNodePath = join(binDir, nodeFilename)
@@ -32,6 +33,7 @@ try {
 
 const runtimeReady =
   existsSync(runtimePackagePath) &&
+  existsSync(webSearchPackagePath) &&
   existsSync(bundledNodePath) &&
   JSON.stringify(currentMarker) === JSON.stringify(marker)
 
@@ -52,6 +54,7 @@ if (!runtimeReady) {
 }
 
 const runtimePackage = JSON.parse(readFileSync(runtimePackagePath, 'utf8'))
+const webSearchPackage = JSON.parse(readFileSync(webSearchPackagePath, 'utf8'))
 console.log(
-  `[prepare-runtime] bundled Node ${process.version} and cesium-mcp-runtime ${runtimePackage.version}`,
+  `[prepare-runtime] bundled Node ${process.version}, cesium-mcp-runtime ${runtimePackage.version}, and open-websearch ${webSearchPackage.version}`,
 )
