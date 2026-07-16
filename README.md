@@ -3,7 +3,7 @@
   <h1>GaiaAgent</h1>
   <p><strong>AI-native GIS workspace for operating a 3D globe, MCP tools, and geospatial task workflows through conversation.</strong></p>
 
-  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.6"><img src="https://img.shields.io/badge/release-v0.3.6-blue?style=flat-square" alt="Release v0.3.6" /></a>
+  <a href="https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.7"><img src="https://img.shields.io/badge/release-v0.3.7-blue?style=flat-square" alt="Release v0.3.7" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/blob/main/LICENSE"><img src="https://img.shields.io/github/license/gaopengbin/GaiaAgent?style=flat-square" alt="License" /></a>
   <a href="https://github.com/gaopengbin/GaiaAgent/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gaopengbin/GaiaAgent/ci.yml?branch=main&style=flat-square&label=CI" alt="CI" /></a>
   <a href="https://github.com/gaopengbin/cesium-mcp"><img src="https://img.shields.io/badge/built%20on-cesium--mcp-blue?style=flat-square" alt="cesium-mcp" /></a>
@@ -29,13 +29,18 @@ The product direction is not just “chat with a map”. GaiaAgent is becoming a
 
 ## Download
 
-Latest release: [GaiaAgent v0.3.6](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.6)
+Latest release: [GaiaAgent v0.3.7](https://github.com/gaopengbin/GaiaAgent/releases/tag/v0.3.7)
 
 Published artifacts include:
 
 - Windows x64: `.exe` installer and `.msi`
 - macOS Apple Silicon: `.dmg`
 - Linux x64: `.deb`, `.rpm`
+
+## Highlights in v0.3.7
+
+- **Reliable Windows upgrades**: GaiaAgent closes all managed MCP child processes during shutdown, and the NSIS installer removes only stale bundled runtime processes before replacing files.
+- **Convergent web tasks**: equivalent searches and page fetches are deduplicated within a run, the agent must answer from collected evidence before exhausting its round budget, and overlapping external fetch tools are hidden when the built-in fetcher is available.
 
 ## Highlights in v0.3.6
 

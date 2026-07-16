@@ -1,6 +1,6 @@
 {
   "productName": "GaiaAgent",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "identifier": "com.gaiaagent.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -46,6 +46,11 @@
     "resources": {
       "runtime-bundle/bin/": "runtime/bin/",
       "runtime-bundle/node_modules/": "runtime/node_modules/"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/nsis-hooks.nsh"
+      }
     }
   }
 }

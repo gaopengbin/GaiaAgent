@@ -7465,6 +7465,13 @@ fn provider_configuration(
     })
 }
 
+fn overlaps_builtin_web_fetch(tool_name: &str) -> bool {
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "fetch_html" | "fetch_markdown" | "fetch_txt" | "fetch_readable"
+    )
+}
+
 #[tauri::command]
 async fn agent_run_native(
     request: NativeAgentRunRequest,
@@ -7509,10 +7516,19 @@ async fn agent_run_native(
                 retryable: true,
             })?;
     mcp_tools.sort_by_key(|binding| binding.server_id != mcp::BUILTIN_WEB_SEARCH_SERVER_ID);
+    let builtin_web_fetch_available = mcp_tools.iter().any(|binding| {
+        binding.server_id == mcp::BUILTIN_WEB_SEARCH_SERVER_ID && binding.tool.name == "web_fetch"
+    });
     let bridge_tool_names: HashSet<String> =
         runtime_tools.iter().map(|tool| tool.name.clone()).collect();
     let mut mcp_tool_routes = HashMap::new();
     for mut binding in mcp_tools {
+        if builtin_web_fetch_available
+            && binding.server_id != mcp::BUILTIN_WEB_SEARCH_SERVER_ID
+            && overlaps_builtin_web_fetch(&binding.tool.name)
+        {
+            continue;
+        }
         if binding.server_id == mcp::BUILTIN_WEB_SEARCH_SERVER_ID {
             if !mcp::BUILTIN_WEB_TOOL_NAMES.contains(&binding.tool.name.as_str()) {
                 continue;
@@ -8163,6 +8179,7 @@ pub fn run() {
         ])
         .on_window_event(|win, event| {
             if let tauri::WindowEvent::Destroyed = event {
+                tauri::async_runtime::block_on(win.state::<mcp::McpServerManager>().shutdown_all());
                 if let Some(mut child) = win
                     .state::<AppState>()
                     .runtime_process
@@ -8184,6 +8201,14 @@ mod tests {
     use crate::agent::ApprovalGate;
 
     use super::*;
+
+    #[test]
+    fn builtin_web_fetch_hides_only_equivalent_generic_fetch_tools() {
+        assert!(overlaps_builtin_web_fetch("fetch_html"));
+        assert!(overlaps_builtin_web_fetch("FETCH_MARKDOWN"));
+        assert!(!overlaps_builtin_web_fetch("fetch_json"));
+        assert!(!overlaps_builtin_web_fetch("fetch_youtube_transcript"));
+    }
 
     #[test]
     fn resolves_local_attachment_handles_recursively() {

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -257,6 +258,74 @@ fn compact_tool_result_for_provider(output: &str) -> String {
 
     trimmed.to_string()
 }
+
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".into(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => serde_json::to_string(value).unwrap_or_default(),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            format!(
+                "{{{}}}",
+                entries
+                    .into_iter()
+                    .map(|(key, value)| format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap_or_default(),
+                        canonical_json(value)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    }
+}
+
+fn normalized_argument(arguments: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| arguments.get(*key).and_then(Value::as_str))
+        .map(|value| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn tool_call_fingerprint(call: &NativeToolCall) -> String {
+    let name = call.name.to_ascii_lowercase();
+    if name == "web_search" || name.ends_with("_search") {
+        if let Some(query) = normalized_argument(&call.arguments, &["query", "q", "search"]) {
+            return format!("web-search:{query}");
+        }
+    }
+    if matches!(
+        name.as_str(),
+        "web_fetch" | "fetch_html" | "fetch_markdown" | "fetch_txt" | "fetch_readable"
+    ) {
+        if let Some(url) = normalized_argument(&call.arguments, &["url", "uri"]) {
+            return format!("web-fetch:{url}");
+        }
+    }
+    format!("tool:{name}:{}", canonical_json(&call.arguments))
+}
+
+const DUPLICATE_TOOL_RESULT: &str = "This equivalent tool request already completed during this run. Reuse the existing result and answer the user now; do not call another search or fetch tool for the same query or URL.";
+const CONVERGENCE_PROMPT: &str = "You already have tool results sufficient to respond. Do not call any more tools. Answer the user's original request now using the evidence already collected. Be concise, acknowledge any remaining uncertainty, and do not mention internal budgets.";
 
 fn compact_image_tool_result(output: &str) -> Option<String> {
     if let Some(index) = output.find("data:image/") {
@@ -535,6 +604,9 @@ where
             &config.user_attachment_handles,
         ));
         let mut answer = String::new();
+        let mut completed_tool_calls = HashSet::new();
+        let mut successful_tool_results = 0_u32;
+        let mut convergence_required = false;
 
         let mut active_plan: Option<RuntimeTaskPlan> = None;
         if config.enable_model_planning {
@@ -570,12 +642,27 @@ where
 
         loop {
             self.check_cancelled(&mut run, &cancelled, &mut emit)?;
+            let force_final_answer = convergence_required
+                || (successful_tool_results > 0
+                    && run.round.saturating_add(1) >= run.budget.max_rounds);
+            if force_final_answer {
+                turns.push(ProviderTurn::Message {
+                    message: ProviderMessage {
+                        role: MessageRole::System,
+                        content: CONVERGENCE_PROMPT.into(),
+                    },
+                });
+            }
             self.apply(&mut run, RunAction::BeginRound)?;
             emit(RuntimeEvent::PhaseChanged { phase: run.phase });
             let request = ProviderRequest {
                 model: config.model.clone(),
                 turns: turns.clone(),
-                tools: config.tools.clone(),
+                tools: if force_final_answer {
+                    Vec::new()
+                } else {
+                    config.tools.clone()
+                },
                 max_output_tokens: config.max_output_tokens,
                 temperature: config.temperature,
             };
@@ -679,6 +766,29 @@ where
             let mut results = Vec::new();
             for call in calls {
                 self.check_cancelled(&mut run, &cancelled, &mut emit)?;
+                let fingerprint = tool_call_fingerprint(&call);
+                if completed_tool_calls.contains(&fingerprint) {
+                    convergence_required = true;
+                    emit(RuntimeEvent::TaskStepUpdated {
+                        step_id: call.id.clone(),
+                        status: TaskStepStatus::Completed,
+                        risk: Some(self.approvals.risk(&call)),
+                        error: None,
+                        artifact_refs: Vec::new(),
+                    });
+                    emit(RuntimeEvent::ToolStarted { call: call.clone() });
+                    emit(RuntimeEvent::ToolCompleted {
+                        call_id: call.id.clone(),
+                        output: DUPLICATE_TOOL_RESULT.into(),
+                    });
+                    results.push(ProviderToolResult {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        output: DUPLICATE_TOOL_RESULT.into(),
+                        is_error: false,
+                    });
+                    continue;
+                }
                 if self.approvals.requires_approval(&call) {
                     let risk = self.approvals.risk(&call);
                     self.apply(&mut run, RunAction::RequestApproval(call.clone()))?;
@@ -726,6 +836,8 @@ where
                 };
                 let result = match execution {
                     Ok(Ok(output)) => {
+                        completed_tool_calls.insert(fingerprint);
+                        successful_tool_results = successful_tool_results.saturating_add(1);
                         let artifact_refs = extract_tool_artifact_refs(&output);
                         let provider_output = compact_tool_result_for_provider(&output);
                         emit(RuntimeEvent::TaskStepUpdated {
@@ -1220,12 +1332,64 @@ fn transition_error(error: TransitionError) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
 
     use serde_json::json;
 
     use super::*;
     use crate::agent::ProviderUsage;
+
+    #[test]
+    fn canonical_tool_fingerprint_ignores_object_key_order() {
+        let left = NativeToolCall {
+            id: "left".into(),
+            name: "custom_tool".into(),
+            arguments: json!({"b": 2, "a": {"d": 4, "c": 3}}),
+        };
+        let right = NativeToolCall {
+            id: "right".into(),
+            name: "custom_tool".into(),
+            arguments: json!({"a": {"c": 3, "d": 4}, "b": 2}),
+        };
+        assert_eq!(tool_call_fingerprint(&left), tool_call_fingerprint(&right));
+    }
+
+    #[test]
+    fn equivalent_web_fetch_tools_share_a_url_fingerprint() {
+        let builtin = NativeToolCall {
+            id: "builtin".into(),
+            name: "web_fetch".into(),
+            arguments: json!({"url": "HTTPS://Example.com/news/"}),
+        };
+        let external = NativeToolCall {
+            id: "external".into(),
+            name: "fetch_markdown".into(),
+            arguments: json!({"url": "https://example.com/news"}),
+        };
+        assert_eq!(
+            tool_call_fingerprint(&builtin),
+            tool_call_fingerprint(&external)
+        );
+    }
+
+    #[test]
+    fn distinct_web_queries_are_not_deduplicated() {
+        let first = NativeToolCall {
+            id: "first".into(),
+            name: "web_search".into(),
+            arguments: json!({"query": "GitHub trending today"}),
+        };
+        let second = NativeToolCall {
+            id: "second".into(),
+            name: "web_search".into(),
+            arguments: json!({"query": "GitHub trending Rust"}),
+        };
+        assert_ne!(
+            tool_call_fingerprint(&first),
+            tool_call_fingerprint(&second)
+        );
+    }
 
     struct FakeProvider(Mutex<VecDeque<Vec<ProviderEvent>>>);
     impl ModelProvider for FakeProvider {
@@ -1243,6 +1407,13 @@ mod tests {
     struct FakeTools;
     impl ToolExecutor for FakeTools {
         fn execute(&self, call: NativeToolCall) -> AgentFuture<'_, Result<String, String>> {
+            Box::pin(async move { Ok(format!("{} complete", call.name)) })
+        }
+    }
+    struct CountingTools(Arc<AtomicUsize>);
+    impl ToolExecutor for CountingTools {
+        fn execute(&self, call: NativeToolCall) -> AgentFuture<'_, Result<String, String>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
             Box::pin(async move { Ok(format!("{} complete", call.name)) })
         }
     }
@@ -1426,6 +1597,62 @@ mod tests {
         assert_eq!(outcome.run.phase, RunPhase::Completed);
         assert_eq!(outcome.run.tool_calls, 1);
         assert!(matches!(outcome.turns[3], ProviderTurn::ToolResults { .. }));
+    }
+
+    #[tokio::test]
+    async fn skips_equivalent_web_fetches_and_converges_to_an_answer() {
+        let provider = FakeProvider(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall {
+                    call: NativeToolCall {
+                        id: "fetch-1".into(),
+                        name: "web_fetch".into(),
+                        arguments: json!({"url": "https://example.com/trending"}),
+                    },
+                },
+                ProviderEvent::Completed,
+            ],
+            vec![
+                ProviderEvent::ToolCall {
+                    call: NativeToolCall {
+                        id: "fetch-2".into(),
+                        name: "fetch_markdown".into(),
+                        arguments: json!({"url": "HTTPS://EXAMPLE.COM/trending/"}),
+                    },
+                },
+                ProviderEvent::Completed,
+            ],
+            vec![
+                ProviderEvent::TextDelta {
+                    text: "Here are the results".into(),
+                },
+                ProviderEvent::Completed,
+            ],
+        ])));
+        let executions = Arc::new(AtomicUsize::new(0));
+        let runtime = AgentRuntime::new(provider, CountingTools(executions.clone()), AllowAll);
+        let mut completed_outputs = Vec::new();
+        let outcome = runtime
+            .run(
+                "r-web".into(),
+                "search trending projects".into(),
+                config(),
+                Arc::new(AtomicBool::new(false)),
+                |event| {
+                    if let RuntimeEvent::ToolCompleted { output, .. } = event {
+                        completed_outputs.push(output);
+                    }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(executions.load(Ordering::Relaxed), 1);
+        assert_eq!(outcome.run.tool_calls, 1);
+        assert_eq!(outcome.answer, "Here are the results");
+        assert!(completed_outputs
+            .iter()
+            .any(|output| output == DUPLICATE_TOOL_RESULT));
     }
 
     #[tokio::test]

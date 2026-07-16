@@ -319,6 +319,21 @@ impl McpServerManager {
         mcp_call_tool_inner(self, server_id, tool_name, arguments, call_id).await
     }
 
+    pub async fn shutdown_all(&self) {
+        let processes = self
+            .servers
+            .lock()
+            .await
+            .drain()
+            .map(|(_, process)| process)
+            .collect::<Vec<_>>();
+        for process in processes {
+            close_process(process).await;
+        }
+        self.active_calls.lock().await.clear();
+        *self.builtin_web_proxy.lock().await = None;
+    }
+
     async fn start_stdio_process(
         &self,
         server_id: String,
