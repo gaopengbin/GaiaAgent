@@ -1,6 +1,7 @@
 pub mod agent;
 mod ai_sandbox;
 mod mcp;
+mod resource_proxy;
 mod telemetry;
 
 use std::collections::{HashMap, HashSet};
@@ -1857,6 +1858,8 @@ pub struct AppState {
     pub runtime_process: Mutex<Option<Child>>,
     pub runtime_start_lock: AsyncMutex<()>,
     pub runtime_port: u16,
+    pub resource_proxy_port: u16,
+    pub resource_proxy_secret: String,
     pub model_settings: Mutex<ModelSettings>,
     pub active_requests: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub active_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
@@ -2491,6 +2494,15 @@ fn app_managed_runtime_bin(name: &str) -> Option<PathBuf> {
 #[tauri::command]
 async fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<u16, String> {
     ensure_runtime(&app, &state).await
+}
+
+#[tauri::command]
+fn resource_proxy_url(source: String, state: State<'_, AppState>) -> Result<String, String> {
+    resource_proxy::proxy_url(
+        state.resource_proxy_port,
+        &state.resource_proxy_secret,
+        &source,
+    )
 }
 
 async fn ensure_runtime(app: &tauri::AppHandle, state: &AppState) -> Result<u16, String> {
@@ -7117,6 +7129,41 @@ struct NativeToolExecutor<'a> {
     attachments: HashMap<String, agent::ProviderAttachment>,
 }
 
+fn tool_result_failure(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let explicitly_failed = object.get("success").and_then(Value::as_bool) == Some(false)
+        || object.get("ok").and_then(Value::as_bool) == Some(false)
+        || object.get("isError").and_then(Value::as_bool) == Some(true)
+        || object.get("is_error").and_then(Value::as_bool) == Some(true)
+        || object
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| {
+                matches!(
+                    status.to_ascii_lowercase().as_str(),
+                    "error" | "failed" | "failure"
+                )
+            });
+    if !explicitly_failed {
+        return None;
+    }
+
+    ["error", "message", "detail", "reason"]
+        .iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| Some("tool reported an unsuccessful result".into()))
+}
+
+fn serialize_tool_result(value: Value) -> Result<String, String> {
+    if let Some(error) = tool_result_failure(&value) {
+        return Err(error);
+    }
+    serde_json::to_string(&value).map_err(|error| error.to_string())
+}
+
 fn stable_attachment_handle(run_id: &str, index: usize) -> String {
     let safe_run_id = run_id
         .chars()
@@ -7250,7 +7297,7 @@ impl agent::ToolExecutor for NativeToolExecutor<'_> {
             let scene_call_id = call.id.clone();
             if is_config_tool(&scene_action) {
                 let value = execute_config_tool(scene_action, scene_arguments)?;
-                return serde_json::to_string(&value).map_err(|error| error.to_string());
+                return serialize_tool_result(value);
             }
             if is_scene_tool(&scene_action) {
                 let value = execute_scene_tool(
@@ -7263,7 +7310,7 @@ impl agent::ToolExecutor for NativeToolExecutor<'_> {
                     proxy_url,
                 )
                 .await?;
-                return serde_json::to_string(&value).map_err(|error| error.to_string());
+                return serialize_tool_result(value);
             }
             let value = if let Some(server_id) = mcp_server {
                 mcp_manager
@@ -7284,6 +7331,9 @@ impl agent::ToolExecutor for NativeToolExecutor<'_> {
                 )
                 .await?
             };
+            if let Some(error) = tool_result_failure(&value) {
+                return Err(error);
+            }
             let _ = persist_tool_result_scene_state(
                 &scene_states,
                 &session_id,
@@ -8220,6 +8270,11 @@ pub fn run() {
     recover_session_attachments_from_native_history(&native_sessions, &mut session_attachments);
     let mut scene_states = load_scene_states_from_disk();
     recover_replay_assets_from_native_history(&native_sessions, &mut scene_states);
+    let (resource_proxy_port, resource_proxy_secret, resource_proxy_listener) =
+        resource_proxy::bind().expect("failed to bind GaiaAgent resource proxy");
+    let resource_proxy_listener = Arc::new(Mutex::new(Some(resource_proxy_listener)));
+    let setup_resource_proxy_listener = resource_proxy_listener.clone();
+    let setup_resource_proxy_secret = resource_proxy_secret.clone();
 
     tauri::Builder::default()
         .manage(AppState {
@@ -8229,6 +8284,8 @@ pub fn run() {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(9100),
+            resource_proxy_port,
+            resource_proxy_secret,
             model_settings: Mutex::new(load_settings_from_disk()),
             active_requests: Arc::new(Mutex::new(HashMap::new())),
             active_approvals: Arc::new(Mutex::new(HashMap::new())),
@@ -8238,7 +8295,15 @@ pub fn run() {
             task_plan_snapshots: Arc::new(Mutex::new(load_task_plan_snapshots_from_disk())),
         })
         .manage(telemetry::TraceStore::open().expect("failed to open trace database"))
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(listener) = setup_resource_proxy_listener.lock().unwrap().take() {
+                resource_proxy::serve(
+                    listener,
+                    resource_proxy_port,
+                    setup_resource_proxy_secret.clone(),
+                )
+                .map_err(std::io::Error::other)?;
+            }
             let handle = app.handle().clone();
             if let Some(win) = handle.get_webview_window("main") {
                 let icon = tauri::include_image!("icons/icon.png");
@@ -8249,6 +8314,7 @@ pub fn run() {
         .manage(mcp::McpServerManager::new())
         .invoke_handler(tauri::generate_handler![
             start_runtime,
+            resource_proxy_url,
             list_tools,
             call_tool,
             load_model_settings,
@@ -8380,6 +8446,26 @@ mod tests {
         assert!(message.content.contains("completed `config_get`"));
         assert!(message.content.contains("connection interrupted"));
         assert!(message.content.contains("asks to continue"));
+    }
+
+    #[test]
+    fn unsuccessful_tool_payloads_are_reported_as_failures() {
+        assert_eq!(
+            tool_result_failure(&json!({"success": false, "error": "Request has failed."})),
+            Some("Request has failed.".into())
+        );
+        assert_eq!(
+            tool_result_failure(&json!({"isError": true, "message": "remote rejected"})),
+            Some("remote rejected".into())
+        );
+        assert_eq!(
+            tool_result_failure(&json!({"status": "failed", "detail": "CORS blocked"})),
+            Some("CORS blocked".into())
+        );
+        assert_eq!(
+            tool_result_failure(&json!({"success": true, "error": null})),
+            None
+        );
     }
 
     #[test]

@@ -83,6 +83,16 @@ const convertBlobUrlToDataUrl = async (url: string): Promise<string | null> => {
   }
 }
 
+const convertFileToDataUrl = (file: File): Promise<string | null> =>
+  new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
+
+type PromptInputAttachment = FileUIPart & { id: string; sourceFile?: File }
+
 const inferMediaType = (file: File) => {
   if (file.type) return file.type
   const name = file.name.toLowerCase()
@@ -172,7 +182,7 @@ const captureScreenshot = async (): Promise<File | null> => {
 // ============================================================================
 
 export interface AttachmentsContext {
-  files: (FileUIPart & { id: string })[]
+  files: PromptInputAttachment[]
   add: (files: File[] | FileList) => void
   remove: (id: string) => void
   clear: () => void
@@ -238,7 +248,7 @@ export const PromptInputProvider = ({
   const clearInput = useCallback(() => setTextInput(''), [])
 
   // ----- attachments state (global when wrapped)
-  const [attachmentFiles, setAttachmentFiles] = useState<(FileUIPart & { id: string })[]>([])
+  const [attachmentFiles, setAttachmentFiles] = useState<PromptInputAttachment[]>([])
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // oxlint-disable-next-line eslint(no-empty-function)
   const openRef = useRef<() => void>(() => {})
@@ -255,6 +265,7 @@ export const PromptInputProvider = ({
         filename: file.name,
         id: nanoid(),
         mediaType: inferMediaType(file),
+        sourceFile: file,
         type: 'file' as const,
         url: URL.createObjectURL(file),
       })),
@@ -502,7 +513,7 @@ export const PromptInput = ({
   const formRef = useRef<HTMLFormElement | null>(null)
 
   // ----- Local attachments (only used when no provider)
-  const [items, setItems] = useState<(FileUIPart & { id: string })[]>([])
+  const [items, setItems] = useState<PromptInputAttachment[]>([])
   const files = usingProvider ? controller.attachments.files : items
 
   // ----- Local referenced sources (always local to PromptInput)
@@ -576,12 +587,13 @@ export const PromptInput = ({
             message: 'Too many files. Some were not added.',
           })
         }
-        const next: (FileUIPart & { id: string })[] = []
+        const next: PromptInputAttachment[] = []
         for (const file of capped) {
           next.push({
             filename: file.name,
             id: nanoid(),
             mediaType: inferMediaType(file),
+            sourceFile: file,
             type: 'file',
             url: URL.createObjectURL(file),
           })
@@ -816,13 +828,17 @@ export const PromptInput = ({
       try {
         // Convert blob URLs to data URLs asynchronously
         const convertedFiles: FileUIPart[] = await Promise.all(
-          files.map(async ({ id: _id, ...item }) => {
-            if (item.url?.startsWith('blob:')) {
-              const dataUrl = await convertBlobUrlToDataUrl(item.url)
-              // If conversion failed, keep the original blob URL
+          files.map(async ({ id: _id, sourceFile, ...item }) => {
+            if (sourceFile || item.url?.startsWith('blob:')) {
+              const dataUrl = sourceFile
+                ? await convertFileToDataUrl(sourceFile)
+                : await convertBlobUrlToDataUrl(item.url ?? '')
+              if (!dataUrl) {
+                throw new Error(`Unable to read attachment: ${item.filename ?? 'image'}`)
+              }
               return {
                 ...item,
-                url: dataUrl ?? item.url,
+                url: dataUrl,
               }
             }
             return item

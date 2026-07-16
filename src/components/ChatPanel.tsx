@@ -2068,13 +2068,11 @@ export function ChatPanel({
             accept="image/*"
             maxFiles={4}
             maxFileSize={5 * 1024 * 1024}
-            onSubmit={(message, event) => {
+            onSubmit={(message) => {
               const text = message.text.trim()
               const imageFiles = message.files.filter(isImageAttachment)
               if ((!text && imageFiles.length === 0) || isBusy || !canSend) return
               onSend(text || '请分析这张图片。', imageFiles)
-              message.clear()
-              event.currentTarget.reset()
             }}
           >
             <ChatImageAttachmentPreview />

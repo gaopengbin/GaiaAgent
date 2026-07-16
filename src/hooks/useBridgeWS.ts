@@ -1,5 +1,64 @@
 import { useState, useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { ConnStatus } from '../types'
+
+const RESOURCE_ACTIONS = new Set([
+  'load3dTiles',
+  'load3dGaussianSplat',
+  'addGaussianSplat',
+  'loadKml',
+  'loadCzml',
+  'addGeoJson',
+  'addGeoJsonPrimitive',
+  'loadImageryService',
+  'loadTerrain',
+  'addModel',
+  'addBillboard',
+])
+const RESOURCE_KEYS = new Set(['url', 'uri', 'image', 'schemaUri'])
+
+function isProxyableResource(value: string): boolean {
+  const source = value.trim()
+  return (
+    /^https?:\/\//i.test(source) ||
+    /^file:\/\//i.test(source) ||
+    /^[a-z]:[\\/]/i.test(source) ||
+    /^\\\\/.test(source) ||
+    /^\//.test(source)
+  )
+}
+
+async function proxyResourceValue(value: unknown, key?: string): Promise<unknown> {
+  if (
+    typeof value === 'string' &&
+    key !== undefined &&
+    RESOURCE_KEYS.has(key) &&
+    isProxyableResource(value)
+  ) {
+    return invoke<string>('resource_proxy_url', { source: value })
+  }
+  if (Array.isArray(value)) {
+    return Promise.all(value.map((item) => proxyResourceValue(item)))
+  }
+  if (value && typeof value === 'object') {
+    const entries = await Promise.all(
+      Object.entries(value).map(async ([childKey, childValue]) => [
+        childKey,
+        await proxyResourceValue(childValue, childKey),
+      ]),
+    )
+    return Object.fromEntries(entries)
+  }
+  return value
+}
+
+async function proxyResourceParams(
+  action: string,
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!RESOURCE_ACTIONS.has(action)) return params
+  return (await proxyResourceValue(params)) as Record<string, unknown>
+}
 
 const BRIDGE_SESSION = 'gaiaagent'
 const RECONNECT_DELAY = 3000
@@ -78,8 +137,9 @@ export function useBridgeWS(bridge: unknown, runtimePort: number | null): { stat
             typeof rawParams.__gaiaCallId === 'string' ? rawParams.__gaiaCallId : undefined
           const params = { ...rawParams }
           delete params.__gaiaCallId
-          console.log('[bridge-ws] calling bridge.execute:', msg.method, params)
-          const result = await b.execute({ action: msg.method, params })
+          const executionParams = await proxyResourceParams(msg.method, params)
+          console.log('[bridge-ws] calling bridge.execute:', msg.method, executionParams)
+          const result = await b.execute({ action: msg.method, params: executionParams })
           const snapshot = b.exportScene()
           console.log('[bridge-ws] execute result:', JSON.stringify(result).slice(0, 200))
 

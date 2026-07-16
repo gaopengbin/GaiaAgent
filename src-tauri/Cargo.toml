@@ -30,11 +30,13 @@ rmcp = { version = "2.0.0", default-features = false, features = ["auth", "clien
 async-trait = "0.1"
 reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = ["native-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
+axum = "0.8"
+base64 = "0.22"
+getrandom = "0.3"
 
 [dev-dependencies]
 rmcp = { version = "2.0.0", default-features = false, features = ["client", "server", "macros", "transport-streamable-http-server"] }
 schemars = "1"
-axum = "0.8"
 tokio-util = "0.7"
 
 [profile.release]

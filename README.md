@@ -40,6 +40,9 @@ Published artifacts include:
 ## Highlights in v0.3.8
 
 - **Recoverable interrupted tasks**: failed, timed-out, cancelled, or disconnected runs persist the original goal, plan, tool progress, partial answer, and interruption reason, so a follow-up such as “continue” resumes the unfinished work.
+- **Desktop-native resource loading**: HTTP, HTTPS, `file://`, Windows paths, and nested 3D Tiles/glTF resources load through a token-protected local proxy instead of inheriting WebView CORS restrictions.
+- **Reliable pasted images**: clipboard images are captured from the original file payload before the composer clears, then persisted and delivered to vision-capable providers.
+- **Truthful tool status**: tool payloads that explicitly report `success: false`, `ok: false`, or an error status now appear as failures instead of completed calls.
 
 ## Highlights in v0.3.7
 
